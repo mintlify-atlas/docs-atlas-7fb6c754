@@ -1,0 +1,85 @@
+{
+  "projectType": "cli-tool",
+  "projectName": "P2P File Share",
+  "projectDescription": "A pure P2P file sharing system in Node.js that distributes files without central servers using BitTorrent-inspired protocol",
+  "theme": "aspen",
+  "primaryColor": "#848c8e",
+  "lightColor": "#11161e",
+  "darkColor": "#cfd0d2",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Usage",
+            "pages": [
+              "usage/running-seed",
+              "usage/running-leecher",
+              "usage/command-reference"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/protocol",
+              "concepts/peer-exchange"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/troubleshooting",
+              "advanced/examples",
+              "advanced/future-improvements"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core Classes",
+            "pages": [
+              "api/node",
+              "api/manager"
+            ]
+          },
+          {
+            "group": "Protocol",
+            "pages": [
+              "api/messages"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Pure P2P architecture without trackers or central servers",
+    "Peer Exchange (PEX) for dynamic peer discovery",
+    "File fragmentation into 64 KiB pieces",
+    "Real-time progress tracking with download speed",
+    "SHA-1 hash verification for file integrity",
+    "TCP-based messaging protocol (handshake, bitfield, request, piece, have, peers)",
+    "Cross-platform support (Linux, Windows, macOS)"
+  ],
+  "publicApiSurface": [
+    "npm start -- --port <port> --file <path>",
+    "npm run seed -- --port <port> --file <path>",
+    "npm run leech -- --port <port> --file <path> --peer <host:port>",
+    "Node class (src/node.js)",
+    "Manager class (src/manager.js)",
+    "Protocol messages: handshake, bitfield, request, piece, have, peers"
+  ]
+}
