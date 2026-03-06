@@ -1,0 +1,247 @@
+---
+title: "Command Reference"
+description: "Complete reference for all command-line flags and options"
+---
+
+## Overview
+
+The P2P file sharing application is started using the `peer.js` entry point with command-line arguments.
+
+### Basic Syntax
+
+```bash
+node src/peer.js --port <puerto> --file <rutaArchivo> [--peer <host:puerto>]
+```
+
+## Required Parameters
+
+<ParamField path="--port" type="integer" required>
+  The TCP port number on which this node will listen for incoming connections.
+  
+  **Validation**: Must be a valid integer between 1 and 65535.
+  
+  **Example**:
+  ```bash
+  node src/peer.js --port 6881 --file video.mkv
+  ```
+  
+  The port is parsed as an integer in `src/peer.js:19`:
+  ```javascript
+  port = parseInt(args[i+1], 10);
+  ```
+</ParamField>
+
+<ParamField path="--file" type="string" required>
+  The file path for this node.
+  
+  - **For seeds**: Path to an existing file to share
+  - **For leechers**: Path where the downloaded file will be saved
+  
+  **Validation**: The path can be absolute or relative. For seeds, the file must exist. For leechers, the file will be created.
+  
+  **Examples**:
+  ```bash
+  # Absolute path
+  node src/peer.js --port 6881 --file "/home/user/videos/movie.mkv"
+  
+  # Relative path
+  node src/peer.js --port 6881 --file "./downloads/file.pdf"
+  ```
+  
+  The file path is read in `src/peer.js:22`:
+  ```javascript
+  filePath = args[i+1];
+  ```
+</ParamField>
+
+## Optional Parameters
+
+<ParamField path="--peer" type="string">
+  Initial peer to connect to in the format `host:port`. This is used by leechers to connect to their first seed or peer.
+  
+  **Format**: `<host>:<port>` where:
+  - `host` can be an IP address (e.g., `192.168.1.100`) or hostname (e.g., `localhost`, `127.0.0.1`)
+  - `port` must be a valid port number
+  
+  **Default**: If not specified, the node will only accept incoming connections and wait for other peers to connect.
+  
+  **Examples**:
+  ```bash
+  # Connect to local seed
+  node src/peer.js --port 6882 --file output.mkv --peer 127.0.0.1:6881
+  
+  # Connect to remote peer
+  node src/peer.js --port 6883 --file file.zip --peer 192.168.1.50:6881
+  ```
+  
+  The peer address is parsed in `src/peer.js:39-50`:
+  ```javascript
+  if (peerAddress) {
+      const sepIndex = peerAddress.lastIndexOf(':');
+      if (sepIndex === -1) {
+          console.error('Formato de --peer inválido. Use host:puerto');
+          process.exit(1);
+      }
+      peerHost = peerAddress.substring(0, sepIndex);
+      peerPort = parseInt(peerAddress.substring(sepIndex+1), 10);
+      if (!peerPort) {
+          console.error('Formato de --peer inválido. Puerto no válido.');
+          process.exit(1);
+      }
+  }
+  ```
+  
+  <Note>
+  For leechers without an initial peer, the node will print a warning:
+  ```
+  Advertencia: Este nodo no tiene el archivo y ningún peer inicial fue proporcionado. 
+  El nodo esperará a que algún seed se conecte.
+  ```
+  </Note>
+</ParamField>
+
+## Validation Rules
+
+### Required Arguments
+
+Both `--port` and `--file` are required. If either is missing, the program displays usage information and exits:
+
+```javascript
+// From src/peer.js:34
+if (!port || !filePath) printUsageAndExit();
+```
+
+### Invalid Arguments
+
+If any unrecognized argument is provided, the program exits with usage information:
+
+```javascript
+// From src/peer.js:28-30
+else {
+    // argumento erroneo
+    printUsageAndExit();
+}
+```
+
+### Peer Format Validation
+
+The `--peer` parameter must follow the `host:port` format:
+
+- Must contain a colon (`:`) separator
+- Port must be a valid integer
+- If validation fails, the program exits with an error message
+
+## Usage Examples
+
+### Starting a Seed Node
+
+```bash
+# Share a file on port 6881
+node src/peer.js --port 6881 --file "/path/to/file.ext"
+```
+
+**Expected output:**
+```
+Nodo P2P iniciado. ID: ab12cd34ef56, escuchando en puerto 6881.
+Archivo disponible para compartir: "file.ext" (1048576 bytes). Esperando conexiones de pares...
+```
+
+### Starting a Leecher Node
+
+```bash
+# Download a file from a seed at 127.0.0.1:6881
+node src/peer.js --port 6882 --file "/path/to/output.ext" --peer 127.0.0.1:6881
+```
+
+**Expected output:**
+```
+Conectando con peer inicial 127.0.0.1:6881...
+Meta de archivo recibida: "file.ext" (1048576 bytes, 16 piezas). Iniciando descarga...
+```
+
+### Using npm Scripts
+
+The `package.json` defines convenient npm scripts:
+
+<CodeGroup>
+```bash Seed Node
+# Using the seed script
+npm run seed -- --port 6881 --file ./my-file.zip
+```
+
+```bash Leecher Node
+# Using the leech script
+npm run leech -- --port 6882 --file ./output.zip --peer 127.0.0.1:6881
+```
+
+```bash Generic Start
+# Using the generic start script
+npm start -- --port 6881 --file ./file.pdf
+```
+</CodeGroup>
+
+From `package.json:6-10`:
+```json
+"scripts": {
+  "start": "node src/peer.js",
+  "seed": "node src/peer.js --port 6881 --file ./ruta_al_archivo",
+  "leech": "node src/peer.js --port 6882 --file ./ruta_al_archivo --peer <host:puerto>"
+}
+```
+
+## Help and Usage Information
+
+To display usage information, run the command without required arguments:
+
+```bash
+node src/peer.js
+```
+
+**Output:**
+```
+Uso: node peer.js --port <puerto> --file <rutaArchivo> [--peer <host:puerto>]
+Ejemplo (iniciar seed): node peer.js --port 6881 --file "/ruta/al/archivo.ext"
+Ejemplo (iniciar peer leecher): node peer.js --port 6882 --file "/ruta/de/salida.ext" --peer 127.0.0.1:6881
+```
+
+This is defined in `src/peer.js:4-9`:
+```javascript
+function printUsageAndExit() {
+    console.log('Uso: node peer.js --port <puerto> --file <rutaArchivo> [--peer <host:puerto>]');
+    console.log('Ejemplo (iniciar seed): node peer.js --port 6881 --file "/ruta/al/archivo.ext"');
+    console.log('Ejemplo (iniciar peer leecher): node peer.js --port 6882 --file "/ruta/de/salida.ext" --peer 127.0.0.1:6881');
+    process.exit(1);
+}
+```
+
+## Error Messages
+
+### Missing Required Arguments
+
+```
+Uso: node peer.js --port <puerto> --file <rutaArchivo> [--peer <host:puerto>]
+...
+```
+*Exits with code 1*
+
+### Invalid Peer Format (Missing Colon)
+
+```
+Formato de --peer inválido. Use host:puerto
+```
+*Exits with code 1*
+
+### Invalid Peer Format (Invalid Port)
+
+```
+Formato de --peer inválido. Puerto no válido.
+```
+*Exits with code 1*
+
+### Unrecognized Argument
+
+```
+Uso: node peer.js --port <puerto> --file <rutaArchivo> [--peer <host:puerto>]
+...
+```
+*Exits with code 1*

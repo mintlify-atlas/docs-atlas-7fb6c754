@@ -1,0 +1,607 @@
+---
+title: 'Protocol Specification'
+description: 'Complete reference for the P2P messaging protocol and connection handling'
+---
+
+## Protocol Overview
+
+The p2p-file-share system uses a **JSON-based messaging protocol** over TCP connections. All messages are UTF-8 encoded JSON objects delimited by newline characters (`\n`).
+
+<Info>
+  Messages are sent as JSON strings followed by a newline: `JSON.stringify(message) + '\n'`
+</Info>
+
+## Message Flow
+
+<Steps>
+  <Step title="Connection Establishment">
+    A peer establishes a TCP connection to another peer's listening port.
+    
+    ```javascript
+    const socket = net.connect(port, host, () => {
+        socket.setEncoding('utf8');
+        this._setupSocketHandlers(socket);
+        this._sendHandshake(socket);
+    });
+    ```
+  </Step>
+  
+  <Step title="Handshake Exchange">
+    Both peers exchange handshake messages containing file metadata and peer IDs.
+    
+    ```json
+    {
+      "type": "handshake",
+      "id": "ab12cd34ef567890",
+      "fileName": "video.mkv",
+      "fileSize": 157286400,
+      "fileHash": "a9f8e7d6c5b4a3921807f6e5d4c3b2a1",
+      "pieceSize": 65536,
+      "port": 6881
+    }
+    ```
+  </Step>
+  
+  <Step title="Bitfield Exchange">
+    After handshake validation, peers send bitfield messages listing available pieces.
+    
+    ```json
+    {
+      "type": "bitfield",
+      "pieces": [0, 1, 2, 3, 5, 8, 13]
+    }
+    ```
+  </Step>
+  
+  <Step title="Piece Requests">
+    Leechers request specific pieces from peers that have them.
+    
+    ```json
+    {
+      "type": "request",
+      "index": 42
+    }
+    ```
+  </Step>
+  
+  <Step title="Piece Transfer">
+    Seeders respond with piece data encoded in base64.
+    
+    ```json
+    {
+      "type": "piece",
+      "index": 42,
+      "data": "SGVsbG8gV29ybGQh..." 
+    }
+    ```
+  </Step>
+  
+  <Step title="Have Notifications">
+    When a peer acquires a new piece, it notifies all connected peers.
+    
+    ```json
+    {
+      "type": "have",
+      "index": 42
+    }
+    ```
+  </Step>
+  
+  <Step title="Peer Exchange">
+    Peers share information about other peers to enable swarm growth.
+    
+    ```json
+    {
+      "type": "peers",
+      "peers": [
+        {"id": "1a2b3c4d5e6f7890", "host": "192.168.1.10", "port": 6882},
+        {"id": "9f8e7d6c5b4a3210", "host": "192.168.1.15", "port": 6883}
+      ]
+    }
+    ```
+  </Step>
+</Steps>
+
+## Message Types
+
+The protocol defines six message types, each serving a specific purpose:
+
+<Accordion title="handshake - Peer Identification and Metadata">
+  ### Purpose
+  
+  The handshake message initiates communication between peers and exchanges critical file metadata. It must be the first message sent after establishing a TCP connection.
+  
+  ### Structure
+  
+  ```json
+  {
+    "type": "handshake",
+    "id": "ab12cd34ef567890",
+    "fileName": "document.pdf",
+    "fileSize": 1048576,
+    "fileHash": "a9f8e7d6c5b4a3921807f6e5d4c3b2a1",
+    "pieceSize": 65536,
+    "port": 6881
+  }
+  ```
+  
+  ### Fields
+  
+  - **type**: Always `"handshake"`
+  - **id**: 16-character hex string (8 random bytes). Unique identifier for the peer.
+  - **fileName**: Name of the file being shared (string or null)
+  - **fileSize**: Total size in bytes (number or null)
+  - **fileHash**: SHA-1 hash of complete file in hex format (string or null)
+  - **pieceSize**: Size of each piece in bytes (number or null)
+  - **port**: TCP port the sender is listening on (number)
+  
+  ### Implementation
+  
+  ```javascript
+  _sendHandshake(socket) {
+      const handshakeMsg = {
+          type: 'handshake',
+          id: this.id,
+          fileName: this.fileName,
+          fileSize: this.fileSize,
+          fileHash: this.fileHash,
+          pieceSize: this.pieceSize,
+          port: this.port
+      };
+      socket.write(JSON.stringify(handshakeMsg) + '\n');
+  }
+  ```
+  
+  ### Validation
+  
+  When receiving a handshake:
+  
+  ```javascript
+  // Reject same ID (shouldn't happen)
+  if (remoteId === this.id) {
+      console.warn('Recibido handshake de un peer con mismo ID que este nodo, ignorando.');
+      return;
+  }
+  
+  // Verify file hash matches (if both are seeders)
+  if (remoteFileHash && this.fileHash && remoteFileHash !== this.fileHash) {
+      console.error('Peer conectado tiene un hash de archivo distinto. Terminando conexión.');
+      socket.end();
+      return;
+  }
+  ```
+  
+  <Note>
+    Leechers initially have null values for fileName, fileSize, fileHash, and pieceSize. They adopt these values from the first seeder they connect to.
+  </Note>
+</Accordion>
+
+<Accordion title="bitfield - Available Pieces Advertisement">
+  ### Purpose
+  
+  The bitfield message informs peers about which pieces the sender currently has. This is sent immediately after the handshake exchange.
+  
+  ### Structure
+  
+  ```json
+  {
+    "type": "bitfield",
+    "pieces": [0, 1, 2, 3, 5, 8, 13, 21, 34]
+  }
+  ```
+  
+  ### Fields
+  
+  - **type**: Always `"bitfield"`
+  - **pieces**: Array of piece indices (0-based) that the sender possesses
+  
+  ### Implementation
+  
+  ```javascript
+  _sendBitfield(socket) {
+      const piecesArray = Array.from(this.havePieces);
+      const bitfieldMsg = {
+          type: 'bitfield',
+          pieces: piecesArray
+      };
+      socket.write(JSON.stringify(bitfieldMsg) + '\n');
+  }
+  ```
+  
+  ### Handling
+  
+  ```javascript
+  _handleBitfield(socket, message) {
+      const pieces = message.pieces;
+      if (!socket.peerId || !this.knownPeers.has(socket.peerId)) return;
+      const peerInfo = this.knownPeers.get(socket.peerId);
+      peerInfo.availablePieces = new Set(pieces);
+      console.log(`Recibido mapa de piezas de peer ${socket.peerId}: ${pieces.length} piezas disponibles.`);
+      // Try to schedule piece requests now that we know peer's availability
+      this._scheduleRequests();
+  }
+  ```
+  
+  <Info>
+    A seeder sends a complete bitfield with all piece indices. A new leecher sends an empty array or waits to acquire pieces before sending.
+  </Info>
+</Accordion>
+
+<Accordion title="request - Piece Request">
+  ### Purpose
+  
+  A leecher sends a request message to ask a peer for a specific piece it needs.
+  
+  ### Structure
+  
+  ```json
+  {
+    "type": "request",
+    "index": 42
+  }
+  ```
+  
+  ### Fields
+  
+  - **type**: Always `"request"`
+  - **index**: Zero-based index of the requested piece
+  
+  ### Sending Requests
+  
+  ```javascript
+  _sendRequest(socket, index) {
+      const requestMsg = {
+          type: 'request',
+          index: index
+      };
+      if (socket) {
+          this.pendingPieces.add(index);
+          if (socket.peerId && this.knownPeers.has(socket.peerId)) {
+              this.knownPeers.get(socket.peerId).busy = true;
+          }
+          socket.write(JSON.stringify(requestMsg) + '\n');
+          console.log(`Solicitando pieza ${index} al peer ${socket.peerId}.`);
+      }
+  }
+  ```
+  
+  ### Handling Requests
+  
+  ```javascript
+  _handleRequest(socket, message) {
+      const index = message.index;
+      if (!this.havePieces.has(index)) {
+          console.warn(`Peer ${socket.peerId} solicitó pieza ${index} que no tenemos.`);
+          return;
+      }
+      // Read piece from file and send it
+      this.fileManager.readPiece(index).then(buffer => {
+          const pieceMsg = {
+              type: 'piece',
+              index: index,
+              data: buffer.toString('base64')
+          };
+          socket.write(JSON.stringify(pieceMsg) + '\n');
+      }).catch(err => {
+          console.error(`Error al leer pieza ${index} para enviar:`, err);
+      });
+  }
+  ```
+  
+  <Note>
+    Peers track pending requests to avoid requesting the same piece from multiple peers simultaneously. The `busy` flag prevents overwhelming a peer with parallel requests.
+  </Note>
+</Accordion>
+
+<Accordion title="piece - Piece Data Transfer">
+  ### Purpose
+  
+  A seeder responds to a request with the actual piece data encoded in base64.
+  
+  ### Structure
+  
+  ```json
+  {
+    "type": "piece",
+    "index": 42,
+    "data": "SGVsbG8gV29ybGQhIFRoaXMgaXMgYSBiYXNlNjQgZW5jb2RlZCBwaWVjZS4uLg=="
+  }
+  ```
+  
+  ### Fields
+  
+  - **type**: Always `"piece"`
+  - **index**: Zero-based index of this piece
+  - **data**: Base64-encoded piece data (typically 64 KiB when encoded)
+  
+  ### Handling Received Pieces
+  
+  ```javascript
+  async _handlePiece(socket, message) {
+      const index = message.index;
+      const dataBase64 = message.data;
+      
+      // Decode base64 to buffer
+      const dataBuffer = Buffer.from(dataBase64, 'base64');
+      
+      // Write to file
+      try {
+          await this.fileManager.writePiece(index, dataBuffer);
+      } catch (err) {
+          console.error(`Error escribiendo la pieza ${index}:`, err);
+          return;
+      }
+      
+      // Update tracking structures
+      this.havePieces.add(index);
+      this.missingPieces.delete(index);
+      this.pendingPieces.delete(index);
+      
+      // Mark peer as free for next request
+      if (socket.peerId && this.knownPeers.has(socket.peerId)) {
+          this.knownPeers.get(socket.peerId).busy = false;
+      }
+      
+      // Notify other peers we now have this piece
+      const haveMsg = { type: 'have', index: index };
+      for (let [peerId, peer] of this.knownPeers.entries()) {
+          if (peer.socket && peerId !== socket.peerId) {
+              peer.socket.write(JSON.stringify(haveMsg) + '\n');
+          }
+      }
+      
+      console.log(`Pieza ${index} recibida (${dataBuffer.length} bytes). Piezas restantes: ${this.missingPieces.size}.`);
+      
+      // Check if download is complete
+      if (this.missingPieces.size === 0) {
+          await this._handleDownloadComplete();
+      } else {
+          this._scheduleRequests();
+      }
+  }
+  ```
+  
+  <Info>
+    Base64 encoding increases data size by approximately 33%. For a 64 KiB piece (65,536 bytes), the encoded string is about 87 KB.
+  </Info>
+</Accordion>
+
+<Accordion title="have - New Piece Notification">
+  ### Purpose
+  
+  When a leecher successfully receives and writes a piece, it broadcasts a 'have' message to all connected peers to update their view of piece availability.
+  
+  ### Structure
+  
+  ```json
+  {
+    "type": "have",
+    "index": 42
+  }
+  ```
+  
+  ### Fields
+  
+  - **type**: Always `"have"`
+  - **index**: Zero-based index of the newly acquired piece
+  
+  ### Sending Have Messages
+  
+  ```javascript
+  // After successfully writing a piece, notify all peers
+  const haveMsg = {
+      type: 'have',
+      index: index
+  };
+  for (let [peerId, peer] of this.knownPeers.entries()) {
+      if (peer.socket && peerId !== socket.peerId) {
+          peer.socket.write(JSON.stringify(haveMsg) + '\n');
+      }
+  }
+  ```
+  
+  ### Handling Have Messages
+  
+  ```javascript
+  _handleHave(socket, message) {
+      const index = message.index;
+      if (!socket.peerId || !this.knownPeers.has(socket.peerId)) return;
+      
+      const peerInfo = this.knownPeers.get(socket.peerId);
+      peerInfo.availablePieces.add(index);
+      console.log(`Peer ${socket.peerId} ha obtenido la pieza ${index}.`);
+      
+      // If we need this piece and peer is available, request it
+      if (this.missingPieces.has(index) && !this.pendingPieces.has(index) && !peerInfo.busy) {
+          this._scheduleRequests();
+      }
+  }
+  ```
+  
+  <Note>
+    Have messages enable real-time updates of piece distribution, allowing efficient scheduling of requests as the swarm evolves.
+  </Note>
+</Accordion>
+
+<Accordion title="peers - Peer Exchange">
+  ### Purpose
+  
+  The 'peers' message enables peer discovery without central trackers. Peers share information about other peers they know, allowing the swarm to grow organically.
+  
+  ### Structure
+  
+  ```json
+  {
+    "type": "peers",
+    "peers": [
+      {
+        "id": "1a2b3c4d5e6f7890",
+        "host": "192.168.1.10",
+        "port": 6882
+      },
+      {
+        "id": "9f8e7d6c5b4a3210",
+        "host": "192.168.1.15",
+        "port": 6883
+      }
+    ]
+  }
+  ```
+  
+  ### Fields
+  
+  - **type**: Always `"peers"`
+  - **peers**: Array of peer objects, each containing:
+    - **id**: 16-character hex peer identifier
+    - **host**: IP address or hostname
+    - **port**: TCP port number
+  
+  ### Sending Peer Lists
+  
+  After handshake, share known peers with the new connection:
+  
+  ```javascript
+  const otherPeers = [];
+  for (let [pid, pinfo] of this.knownPeers.entries()) {
+      if (pid !== remoteId && pinfo.socket) {
+          otherPeers.push({ 
+              id: pid, 
+              host: pinfo.host || pinfo.socket.remoteAddress, 
+              port: pinfo.port 
+          });
+      }
+  }
+  if (otherPeers.length > 0) {
+      const peersMsg = { type: 'peers', peers: otherPeers };
+      socket.write(JSON.stringify(peersMsg) + '\n');
+  }
+  ```
+  
+  ### Handling Peer Discovery
+  
+  ```javascript
+  _handlePeers(socket, message) {
+      const peersList = message.peers;
+      for (let peer of peersList) {
+          const { id: peerId, host, port } = peer;
+          if (peerId === this.id) continue;  // Ignore our own ID
+          
+          if (!this.knownPeers.has(peerId)) {
+              this.knownPeers.set(peerId, { 
+                  id: peerId, host, port, 
+                  socket: null, 
+                  availablePieces: new Set(), 
+                  busy: false 
+              });
+              
+              // Apply connection rule to prevent duplicates
+              if (this._shouldInitiateConnection(peerId)) {
+                  console.log(`Descubierto peer ${peerId} en ${host}:${port}, iniciando conexión...`);
+                  this.connectToPeer(host, port);
+              } else {
+                  console.log(`Descubierto peer ${peerId}. Esperando a que el peer inicie conexión.`);
+              }
+          }
+      }
+  }
+  ```
+  
+  See [Peer Exchange (PEX)](/concepts/peer-exchange) for more details on the connection rules.
+</Accordion>
+
+## TCP Connection Handling
+
+### Message Framing
+
+Messages are delimited by newline characters. The receiver maintains a buffer and extracts complete messages:
+
+```javascript
+socket.on('data', async (data) => {
+    // Concatenate incoming data to buffer
+    socket.buffer += data;
+    let newlineIndex;
+    
+    // Process all complete messages in buffer
+    while ((newlineIndex = socket.buffer.indexOf('\n')) !== -1) {
+        const rawMessage = socket.buffer.slice(0, newlineIndex);
+        socket.buffer = socket.buffer.slice(newlineIndex + 1);
+        
+        if (!rawMessage) continue;  // Skip empty lines
+        
+        let message;
+        try {
+            message = JSON.parse(rawMessage);
+        } catch (err) {
+            console.error('Mensaje JSON malformado recibido, descartando:', rawMessage);
+            continue;
+        }
+        
+        await this._handleMessage(socket, message);
+    }
+});
+```
+
+### Connection Lifecycle
+
+<Steps>
+  <Step title="Setup">
+    Configure socket encoding and event handlers:
+    
+    ```javascript
+    socket.setEncoding('utf8');
+    socket.peerId = null;
+    socket.isOutgoing = true;  // or false for incoming
+    socket.buffer = '';
+    this._setupSocketHandlers(socket);
+    ```
+  </Step>
+  
+  <Step title="Active Communication">
+    Exchange messages according to protocol flow.
+  </Step>
+  
+  <Step title="Close Handling">
+    Clean up state when connection closes:
+    
+    ```javascript
+    socket.on('close', () => {
+        if (socket.peerId && this.knownPeers.has(socket.peerId)) {
+            const peerInfo = this.knownPeers.get(socket.peerId);
+            peerInfo.socket = null;
+            peerInfo.busy = false;
+        }
+        // Clear pending requests and reschedule
+        this.pendingPieces.clear();
+        this._scheduleRequests();
+    });
+    ```
+  </Step>
+</Steps>
+
+### Error Handling
+
+```javascript
+socket.on('error', (err) => {
+    console.error(`Error en la conexión con peer ${socket.peerId || socket.remoteAddress}:`, err.message);
+});
+```
+
+## Protocol Features
+
+<CardGroup cols={2}>
+  <Card title="JSON-Based" icon="brackets-curly">
+    Human-readable, easy to debug, and language-agnostic.
+  </Card>
+  
+  <Card title="Newline Delimited" icon="arrows-split-up-and-left">
+    Simple framing with buffering for partial message handling.
+  </Card>
+  
+  <Card title="Stateful Connections" icon="link">
+    Persistent TCP connections with bidirectional message flow.
+  </Card>
+  
+  <Card title="Base64 Encoding" icon="binary">
+    Binary piece data safely transmitted as JSON strings.
+  </Card>
+</CardGroup>

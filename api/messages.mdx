@@ -1,0 +1,451 @@
+---
+title: "Protocol Messages"
+description: "JSON message protocol specification"
+---
+
+The P2P file sharing system uses a JSON-based protocol for peer communication. All messages are newline-delimited JSON objects sent over TCP connections.
+
+## Message Format
+
+All messages follow this structure:
+
+```json
+{
+  "type": "message_type",
+  // Additional fields specific to message type
+}
+```
+
+Messages are sent as JSON strings terminated by a newline character (`\n`):
+
+```javascript:node.js:446
+socket.write(JSON.stringify(handshakeMsg) + '\n');
+```
+
+## Message Types
+
+### handshake
+
+Sent when establishing a connection to exchange peer identity and file metadata.
+
+**Direction:** Bidirectional (both peers send on connection)
+
+**Structure:**
+
+<ResponseField name="type" type="string" required>
+  Message type identifier: `"handshake"`
+</ResponseField>
+
+<ResponseField name="id" type="string" required>
+  Unique peer identifier (16 hexadecimal characters)
+</ResponseField>
+
+<ResponseField name="fileName" type="string">
+  Name of the file being shared
+</ResponseField>
+
+<ResponseField name="fileSize" type="number">
+  Total file size in bytes
+</ResponseField>
+
+<ResponseField name="fileHash" type="string">
+  SHA-1 hash of the file content (40 hex characters)
+</ResponseField>
+
+<ResponseField name="pieceSize" type="number">
+  Size of each piece in bytes (typically 65536)
+</ResponseField>
+
+<ResponseField name="port" type="number" required>
+  TCP port this peer is listening on
+</ResponseField>
+
+**Example:**
+
+```json
+{
+  "type": "handshake",
+  "id": "a1b2c3d4e5f6g7h8",
+  "fileName": "example.txt",
+  "fileSize": 1048576,
+  "fileHash": "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+  "pieceSize": 65536,
+  "port": 6881
+}
+```
+
+**Sent when:**
+- Initiating an outgoing connection (immediately after connection)
+- Responding to an incoming connection (after receiving peer's handshake)
+
+```javascript:node.js:435-451
+const handshakeMsg = {
+  type: 'handshake',
+  id: this.id,
+  fileName: this.fileName,
+  fileSize: this.fileSize,
+  fileHash: this.fileHash,
+  pieceSize: this.pieceSize,
+  port: this.port
+};
+socket.write(JSON.stringify(handshakeMsg) + '\n');
+```
+
+**Behavior:**
+- **Seeders** include all file metadata
+- **Leechers** may have `null` values for file metadata until received from seeder
+- File hash is used to verify peers are sharing the same file
+- Connection is terminated if file hashes don't match
+
+### bitfield
+
+Sent after handshake to announce which pieces this peer possesses.
+
+**Direction:** Sent by peer with pieces → peer without pieces
+
+**Structure:**
+
+<ResponseField name="type" type="string" required>
+  Message type identifier: `"bitfield"`
+</ResponseField>
+
+<ResponseField name="pieces" type="array" required>
+  Array of piece indices (numbers) that this peer has
+</ResponseField>
+
+**Example:**
+
+```json
+{
+  "type": "bitfield",
+  "pieces": [0, 1, 2, 3, 5, 7, 8, 10]
+}
+```
+
+**Sent when:**
+- After successful handshake exchange (if peer has any pieces)
+- Only sent if `havePieces.size > 0`
+
+```javascript:node.js:266-269
+if (this.havePieces.size > 0) {
+  this._sendBitfield(socket);
+}
+```
+
+```javascript:node.js:453-461
+const piecesArray = Array.from(this.havePieces);
+const bitfieldMsg = {
+  type: 'bitfield',
+  pieces: piecesArray
+};
+socket.write(JSON.stringify(bitfieldMsg) + '\n');
+```
+
+**Behavior:**
+- Receiver updates peer's `availablePieces` set
+- Triggers `_scheduleRequests()` to begin requesting needed pieces
+- Seeders send a complete bitfield with all piece indices
+
+### request
+
+Requests a specific piece from a peer.
+
+**Direction:** Leecher → Seeder (or peer with the piece)
+
+**Structure:**
+
+<ResponseField name="type" type="string" required>
+  Message type identifier: `"request"`
+</ResponseField>
+
+<ResponseField name="index" type="number" required>
+  Zero-based index of the requested piece
+</ResponseField>
+
+**Example:**
+
+```json
+{
+  "type": "request",
+  "index": 5
+}
+```
+
+**Sent when:**
+- Peer needs a piece that another peer has
+- Peer is not busy with another request
+- Piece is not already pending
+
+```javascript:node.js:463-477
+const requestMsg = {
+  type: 'request',
+  index: index
+};
+if (socket) {
+  this.pendingPieces.add(index);
+  if (socket.peerId && this.knownPeers.has(socket.peerId)) {
+    this.knownPeers.get(socket.peerId).busy = true;
+  }
+  socket.write(JSON.stringify(requestMsg) + '\n');
+}
+```
+
+**Behavior:**
+- Sender marks piece as pending
+- Sender marks peer as busy
+- Receiver reads piece from file and responds with `piece` message
+
+### piece
+
+Delivers piece data in response to a request.
+
+**Direction:** Seeder → Leecher (or peer with piece → requesting peer)
+
+**Structure:**
+
+<ResponseField name="type" type="string" required>
+  Message type identifier: `"piece"`
+</ResponseField>
+
+<ResponseField name="index" type="number" required>
+  Zero-based index of the piece
+</ResponseField>
+
+<ResponseField name="data" type="string" required>
+  Base64-encoded piece data
+</ResponseField>
+
+**Example:**
+
+```json
+{
+  "type": "piece",
+  "index": 5,
+  "data": "SGVsbG8sIFdvcmxkISBUaGlzIGlzIGEgdGVzdCBwaWVjZSBkYXRhLg=="
+}
+```
+
+**Sent when:**
+- Peer receives a `request` message for a piece it has
+
+```javascript:node.js:319-327
+this.fileManager.readPiece(index).then(buffer => {
+  const pieceMsg = {
+    type: 'piece',
+    index: index,
+    data: buffer.toString('base64')
+  };
+  socket.write(JSON.stringify(pieceMsg) + '\n');
+});
+```
+
+**Behavior:**
+- Receiver decodes base64 data to Buffer
+- Receiver writes piece to file using `fileManager.writePiece()`
+- Receiver updates tracking: adds to `havePieces`, removes from `missingPieces` and `pendingPieces`
+- Receiver broadcasts `have` message to other peers
+- Receiver marks sender peer as not busy
+
+```javascript:node.js:336-356
+const dataBuffer = Buffer.from(dataBase64, 'base64');
+await this.fileManager.writePiece(index, dataBuffer);
+
+this.havePieces.add(index);
+this.missingPieces.delete(index);
+this.pendingPieces.delete(index);
+
+if (socket.peerId && this.knownPeers.has(socket.peerId)) {
+  this.knownPeers.get(socket.peerId).busy = false;
+}
+```
+
+### have
+
+Announces that this peer has acquired a new piece.
+
+**Direction:** Broadcast to all connected peers
+
+**Structure:**
+
+<ResponseField name="type" type="string" required>
+  Message type identifier: `"have"`
+</ResponseField>
+
+<ResponseField name="index" type="number" required>
+  Zero-based index of the newly acquired piece
+</ResponseField>
+
+**Example:**
+
+```json
+{
+  "type": "have",
+  "index": 5
+}
+```
+
+**Sent when:**
+- After successfully writing a received piece to disk
+- Broadcast to all connected peers (except the sender)
+
+```javascript:node.js:357-365
+const haveMsg = {
+  type: 'have',
+  index: index
+};
+for (let [peerId, peer] of this.knownPeers.entries()) {
+  if (peer.socket && peerId !== socket.peerId) {
+    peer.socket.write(JSON.stringify(haveMsg) + '\n');
+  }
+}
+```
+
+**Behavior:**
+- Receiver adds piece index to peer's `availablePieces` set
+- Receiver may request the piece if needed
+- Enables efficient distribution in swarms (leechers can share with each other)
+
+```javascript:node.js:404-411
+peerInfo.availablePieces.add(index);
+if (this.missingPieces.has(index) && 
+    !this.pendingPieces.has(index) && 
+    !peerInfo.busy) {
+  this._scheduleRequests();
+}
+```
+
+### peers
+
+Shares information about other known peers for peer discovery.
+
+**Direction:** Typically server → client (peer exchange)
+
+**Structure:**
+
+<ResponseField name="type" type="string" required>
+  Message type identifier: `"peers"`
+</ResponseField>
+
+<ResponseField name="peers" type="array" required>
+  Array of peer information objects
+</ResponseField>
+
+<ResponseField name="peers[].id" type="string" required>
+  Unique identifier of the peer
+</ResponseField>
+
+<ResponseField name="peers[].host" type="string" required>
+  IP address or hostname of the peer
+</ResponseField>
+
+<ResponseField name="peers[].port" type="number" required>
+  TCP port the peer is listening on
+</ResponseField>
+
+**Example:**
+
+```json
+{
+  "type": "peers",
+  "peers": [
+    {
+      "id": "b2c3d4e5f6g7h8i9",
+      "host": "192.168.1.100",
+      "port": 6881
+    },
+    {
+      "id": "c3d4e5f6g7h8i9j0",
+      "host": "192.168.1.101",
+      "port": 6882
+    }
+  ]
+}
+```
+
+**Sent when:**
+- After accepting an incoming connection (sharing other known peers)
+- When a new peer joins (announcing the new peer to others)
+
+```javascript:node.js:273-286
+const otherPeers = [];
+for (let [pid, pinfo] of this.knownPeers.entries()) {
+  if (pid !== remoteId && pinfo.socket) {
+    otherPeers.push({ 
+      id: pid, 
+      host: pinfo.host || pinfo.socket.remoteAddress, 
+      port: pinfo.port 
+    });
+  }
+}
+if (otherPeers.length > 0) {
+  const peersMsg = { type: 'peers', peers: otherPeers };
+  socket.write(JSON.stringify(peersMsg) + '\n');
+}
+```
+
+**Behavior:**
+- Receiver adds new peers to `knownPeers` map
+- Receiver initiates connections based on ID comparison rule
+- Prevents duplicate connections (peer with higher ID initiates)
+
+```javascript:node.js:417-431
+for (let peer of peersList) {
+  const { id: peerId, host, port } = peer;
+  if (peerId === this.id) continue;
+  if (!this.knownPeers.has(peerId)) {
+    this.knownPeers.set(peerId, { 
+      id: peerId, host, port, 
+      socket: null, availablePieces: new Set(), busy: false 
+    });
+    if (this._shouldInitiateConnection(peerId)) {
+      this.connectToPeer(host, port);
+    }
+  }
+}
+```
+
+## Message Parsing
+
+Messages are buffered and parsed line-by-line:
+
+```javascript:node.js:116-134
+socket.on('data', async (data) => {
+  socket.buffer += data;
+  let newlineIndex;
+  while ((newlineIndex = socket.buffer.indexOf('\n')) !== -1) {
+    const rawMessage = socket.buffer.slice(0, newlineIndex);
+    socket.buffer = socket.buffer.slice(newlineIndex + 1);
+    if (!rawMessage) continue;
+    let message;
+    try {
+      message = JSON.parse(rawMessage);
+    } catch (err) {
+      console.error('Malformed JSON message received:', rawMessage);
+      continue;
+    }
+    await this._handleMessage(socket, message);
+  }
+});
+```
+
+## Message Flow Example
+
+**Scenario:** Leecher connects to seeder
+
+1. **Leecher → Seeder:** `handshake` (with null file metadata)
+2. **Seeder → Leecher:** `handshake` (with complete file metadata)
+3. **Seeder → Leecher:** `bitfield` (all pieces)
+4. **Seeder → Leecher:** `peers` (list of other peers)
+5. **Leecher → Seeder:** `request` (piece 0)
+6. **Seeder → Leecher:** `piece` (piece 0 data)
+7. **Leecher → All peers:** `have` (piece 0)
+8. **Leecher → Seeder:** `request` (piece 1)
+9. ... continues until all pieces downloaded
+
+## Protocol Design Notes
+
+- **Newline delimiters** allow for simple buffering and parsing
+- **JSON format** is human-readable and easy to debug
+- **Base64 encoding** for binary piece data ensures JSON compatibility
+- **Stateless messages** - each message is self-contained
+- **Asynchronous** - peers can send/receive messages independently

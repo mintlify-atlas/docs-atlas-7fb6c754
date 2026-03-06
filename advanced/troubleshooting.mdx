@@ -1,0 +1,263 @@
+---
+title: Troubleshooting
+description: Common issues and solutions for P2P file sharing
+---
+
+## Common Issues and Solutions
+
+This page covers common problems you may encounter when using the P2P file sharing system and how to resolve them.
+
+<Accordion title="Connection Refused Error">
+  **Error Message:**
+  ```
+  Error de conexión al peer <host>:<port>: connect ECONNREFUSED
+  ```
+
+  **Cause:** The remote peer is not listening on the specified port, or the host/port is incorrect.
+
+  **Solutions:**
+  - Verify the peer is running and listening on the correct port
+  - Check that you're using the correct host and port in your `--peer` argument
+  - Ensure no firewall is blocking the connection
+  - Try connecting to `127.0.0.1` instead of `localhost` if testing locally
+</Accordion>
+
+<Accordion title="Hash Mismatch / File Corruption">
+  **Error Message:**
+  ```
+  Advertencia: el hash del archivo descargado difiere del esperado. El archivo podría estar corrupto.
+  ```
+
+  **Cause:** The downloaded file's SHA-1 hash doesn't match the original file's hash from the seeder.
+
+  **Solutions:**
+  - Delete the corrupted file and restart the download
+  - Ensure the seeder has a valid, uncorrupted source file
+  - Check for network issues that may have corrupted data during transmission
+  - If the problem persists, try downloading from a different seeder
+
+  <Warning>
+    This indicates potential data corruption. Do not use the file until the hash verification passes.
+  </Warning>
+</Accordion>
+
+<Accordion title="Peer Has Different File Hash">
+  **Error Message:**
+  ```
+  Peer conectado tiene un hash de archivo distinto. Terminando conexión.
+  ```
+
+  **Cause:** You're trying to connect to a peer that's sharing a different file.
+
+  **Solutions:**
+  - Ensure all peers in the network are sharing the same file
+  - Verify you're connecting to the correct seeder
+  - Check that the seeder hasn't changed the file after starting
+</Accordion>
+
+<Accordion title="No Initial Peer and Not a Seeder">
+  **Warning Message:**
+  ```
+  Advertencia: Este nodo no tiene el archivo y ningún peer inicial fue proporcionado. 
+  El nodo esperará a que algún seed se conecte.
+  ```
+
+  **Cause:** You started a leecher without the file and without specifying a `--peer` to connect to.
+
+  **Solutions:**
+  - Restart with the `--peer <host:port>` argument pointing to a seeder
+  - Wait for a seeder to connect to your node (if they know your address)
+  - Ensure at least one seeder is running before starting leechers
+</Accordion>
+
+<Accordion title="Malformed JSON Message">
+  **Error Message:**
+  ```
+  Mensaje JSON malformado recibido, descartando: <mensaje>
+  ```
+
+  **Cause:** Network corruption or protocol version mismatch between peers.
+
+  **Solutions:**
+  - Ensure all peers are running the same version of the software
+  - Check network stability
+  - Restart the affected peer
+  - This is usually a transient error and will auto-resolve
+</Accordion>
+
+<Accordion title="Requested Piece Not Available">
+  **Warning Message:**
+  ```
+  Peer <id> solicitó pieza <index> que no tenemos.
+  ```
+
+  **Cause:** A peer requested a piece that this node doesn't have yet.
+
+  **Impact:** This is usually benign - the requesting peer will get the piece from another source.
+
+  **Solutions:**
+  - No action needed - this is handled automatically
+  - If it happens frequently, check that bitfield messages are being sent correctly
+</Accordion>
+
+<Accordion title="Port Already in Use">
+  **Error Message:**
+  ```
+  Error en el servidor P2P: Error: listen EADDRINUSE: address already in use :::<port>
+  ```
+
+  **Cause:** Another process is already using the specified port.
+
+  **Solutions:**
+  - Choose a different port with `--port <different_port>`
+  - Stop the other process using that port
+  - On Linux/Mac, find the process: `lsof -i :<port>` or `netstat -ano | grep <port>`
+  - On Windows: `netstat -ano | findstr <port>`
+</Accordion>
+
+<Accordion title="File Opening Errors">
+  **Error Message:**
+  ```
+  Error abriendo el archivo: <error>
+  ```
+
+  **Common Causes:**
+  - File path doesn't exist (for seeders)
+  - No permission to read the file (for seeders)
+  - No permission to create/write the file (for leechers)
+  - Disk full (for leechers)
+
+  **Solutions:**
+  - Verify the file path is correct and absolute
+  - Check file permissions: `ls -l <file>` on Linux/Mac
+  - Ensure you have write permissions in the destination directory
+  - Free up disk space if needed
+  - Use quotes around file paths with spaces: `--file "/path/with spaces/file.ext"`
+</Accordion>
+
+<Accordion title="Connection Drops During Download">
+  **Symptom:** Download progress stalls, connection messages show peers disconnecting.
+
+  **Console Output:**
+  ```
+  Conexión con peer <id> cerrada.
+  ```
+
+  **Causes:**
+  - Network instability
+  - Seeder stopped running
+  - Firewall killed idle connections
+
+  **Solutions:**
+  - Ensure at least one seeder stays online throughout the download
+  - Connect to multiple peers for redundancy
+  - Check network stability
+  - Pending pieces will be automatically re-requested from other peers
+
+  <Tip>
+    The system automatically clears pending pieces and re-requests them when a connection drops.
+  </Tip>
+</Accordion>
+
+<Accordion title="Hash Computation Errors">
+  **Error Message:**
+  ```
+  Error calculando hash del archivo: <error>
+  No se pudo verificar el hash del archivo descargado: <error>
+  ```
+
+  **Cause:** File system error or corrupted file preventing hash calculation.
+
+  **Solutions:**
+  - Check that the file is not locked by another process
+  - Verify disk integrity
+  - Ensure you have read permissions on the file
+  - Try restarting the node
+</Accordion>
+
+## Invalid Arguments
+
+If you see the usage message, you provided invalid arguments:
+
+```bash
+Uso: node peer.js --port <puerto> --file <rutaArchivo> [--peer <host:puerto>]
+```
+
+**Common mistakes:**
+- Missing required arguments (`--port` and `--file` are mandatory)
+- Invalid `--peer` format (must be `host:port`)
+- Invalid port number (must be numeric)
+
+<Warning>
+  Always use the format: `--peer host:port` (colon separator, not space)
+</Warning>
+
+## Firewall and Network Issues
+
+### Testing Locally
+
+For testing on the same machine:
+```bash
+# Terminal 1 (seeder)
+npm start -- --port 6881 --file "/path/to/file.ext"
+
+# Terminal 2 (leecher)
+npm run leech -- --port 6882 --file "/path/to/output.ext" --peer 127.0.0.1:6881
+```
+
+### Firewall Configuration
+
+If peers cannot connect over a network:
+
+**Linux (ufw):**
+```bash
+sudo ufw allow 6881/tcp
+sudo ufw allow 6882/tcp
+```
+
+**Linux (iptables):**
+```bash
+sudo iptables -A INPUT -p tcp --dport 6881 -j ACCEPT
+```
+
+**Windows Firewall:**
+1. Open Windows Defender Firewall
+2. Click "Advanced settings"
+3. Create new Inbound Rule
+4. Choose Port → TCP → Specific local ports: 6881,6882
+5. Allow the connection
+
+**macOS:**
+```bash
+# macOS Firewall typically allows outgoing connections
+# Incoming may require System Preferences → Security → Firewall Options
+```
+
+<Tip>
+  When troubleshooting, start with localhost testing before moving to network connections.
+</Tip>
+
+## Unknown Message Types
+
+**Warning Message:**
+```
+Tipo de mensaje desconocido recibido: <type>
+```
+
+**Cause:** Peer sent a message type not recognized by the protocol.
+
+**Impact:** The message is ignored, but communication continues.
+
+**Solutions:**
+- Usually indicates version mismatch between peers
+- Ensure all peers run the same software version
+- This warning can typically be ignored if downloads work
+
+## Getting Help
+
+If you encounter issues not covered here:
+
+1. Check the [Architecture](/concepts/architecture) page to understand how the system works
+2. Review the [Protocol Messages](/concepts/protocol) documentation
+3. Enable verbose logging by checking console output carefully
+4. Verify Node.js version is 22 or higher: `node --version`

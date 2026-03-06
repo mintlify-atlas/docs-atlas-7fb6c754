@@ -1,0 +1,172 @@
+---
+title: "Installation"
+description: "Set up P2P File Share on your system"
+---
+
+## Prerequisites
+
+Before installing P2P File Share, ensure you have the following:
+
+<Card title="Node.js v22 or higher" icon="node-js">
+  This project requires Node.js version 22 or later. Check your version with `node --version`.
+</Card>
+
+<Note>
+The project has no external npm dependencies - it uses only Node.js built-in modules like `net`, `fs`, and `crypto`.
+</Note>
+
+## Installation Steps
+
+<Steps>
+  <Step title="Verify Node.js version">
+    First, confirm you have Node.js v22 or higher installed:
+    
+    ```bash
+    node --version
+    ```
+    
+    You should see output like `v22.0.0` or higher. If you need to install or upgrade Node.js, visit [nodejs.org](https://nodejs.org/).
+  </Step>
+  
+  <Step title="Clone the repository">
+    Clone the P2P File Share repository to your local machine:
+    
+    ```bash
+    git clone <repository-url>
+    cd p2p-file-share
+    ```
+    
+    Replace `<repository-url>` with the actual repository URL.
+  </Step>
+  
+  <Step title="Verify the installation">
+    Since the project has no external dependencies, you can verify the installation by checking the project structure:
+    
+    ```bash
+    ls -la src/
+    ```
+    
+    You should see three JavaScript files:
+    - `manager.js` - File management and hash calculation
+    - `node.js` - P2P networking logic
+    - `peer.js` - Application entry point
+  </Step>
+  
+  <Step title="Test the installation">
+    Verify that the application runs correctly by displaying the usage information:
+    
+    ```bash
+    node src/peer.js
+    ```
+    
+    You should see the usage guide:
+    
+    ```
+    Uso: node peer.js --port <puerto> --file <rutaArchivo> [--peer <host:puerto>]
+    Ejemplo (iniciar seed): node peer.js --port 6881 --file "/ruta/al/archivo.ext"
+    Ejemplo (iniciar peer leecher): node peer.js --port 6882 --file "/ruta/de/salida.ext" --peer 127.0.0.1:6881
+    ```
+  </Step>
+</Steps>
+
+## Alternative: Using npm Scripts
+
+The `package.json` file includes convenient npm scripts for common operations:
+
+```json package.json
+{
+  "scripts": {
+    "start": "node src/peer.js",
+    "seed": "node src/peer.js --port 6881 --file ./ruta_al_archivo",
+    "leech": "node src/peer.js --port 6882 --file ./ruta_al_archivo --peer <host:puerto>"
+  }
+}
+```
+
+You can use these scripts as templates:
+
+```bash
+# View usage information
+npm start
+
+# Start a seed node (customize the file path)
+npm run seed
+
+# Start a leecher node (customize the file path and peer address)
+npm run leech
+```
+
+<Tip>
+While these scripts are helpful templates, you'll typically run the application directly with custom parameters as shown in the [Quickstart](/quickstart) guide.
+</Tip>
+
+## Firewall Configuration
+
+Since P2P File Share uses TCP connections, you may need to configure your firewall:
+
+<Steps>
+  <Step title="Allow incoming TCP connections">
+    Ensure your firewall allows incoming TCP connections on the port you specify with `--port`. For example, if using port 6881:
+    
+    ```bash Linux (iptables)
+    sudo iptables -A INPUT -p tcp --dport 6881 -j ACCEPT
+    ```
+    
+    ```bash macOS (built-in firewall)
+    # The firewall typically prompts you when the application first runs
+    # Click "Allow" when prompted
+    ```
+  </Step>
+  
+  <Step title="Configure router port forwarding (optional)">
+    If you want to share files across the internet (not just on your local network), configure port forwarding on your router to forward the chosen port to your machine's local IP address.
+    
+    <Warning>
+    Exposing P2P File Share to the internet without encryption is not recommended for sensitive data.
+    </Warning>
+  </Step>
+</Steps>
+
+## System Requirements
+
+| Requirement | Specification |
+|-------------|---------------|
+| **Node.js** | v22.0.0 or higher |
+| **Operating System** | Linux, macOS, or Windows |
+| **Network** | TCP connectivity between peers |
+| **Disk Space** | Sufficient space for files being shared |
+| **Dependencies** | None (uses Node.js built-in modules only) |
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Node version too old">
+    If you see errors about unsupported features, your Node.js version may be too old. Update to v22 or higher:
+    
+    ```bash
+    # Using nvm (Node Version Manager)
+    nvm install 22
+    nvm use 22
+    ```
+  </Accordion>
+  
+  <Accordion title="Port already in use">
+    If you see `EADDRINUSE` errors, another application is using the port. Choose a different port number with the `--port` flag:
+    
+    ```bash
+    node src/peer.js --port 6882 --file "/path/to/file.ext"
+    ```
+  </Accordion>
+  
+  <Accordion title="Cannot connect to peer">
+    If you cannot connect to a peer:
+    - Verify the peer is running and listening on the specified port
+    - Check firewall settings on both machines
+    - Ensure the host and port in `--peer` are correct
+    - Verify network connectivity with `ping` or `telnet`
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+Now that P2P File Share is installed, proceed to the [Quickstart](/quickstart) guide to share your first file!

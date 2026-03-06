@@ -1,0 +1,305 @@
+---
+title: Usage Examples
+description: Real-world scenarios for P2P file sharing
+---
+
+## Basic Setup
+
+All examples assume you're in the project directory and have Node.js v22+ installed.
+
+### Starting a Seeder
+
+A seeder is a node that has the complete file and shares it with others:
+
+```bash
+npm start -- --port 6881 --file "/path/to/video.mkv"
+```
+
+**Expected Output:**
+```
+Nodo P2P iniciado. ID: ab12cd34ef56, escuchando en puerto 6881.
+Archivo disponible para compartir: "video.mkv" (157286400 bytes). Esperando conexiones de pares...
+```
+
+### Starting a Leecher
+
+A leecher downloads the file from seeders:
+
+```bash
+npm run leech -- --port 6882 --file "/path/to/output.mkv" --peer 127.0.0.1:6881
+```
+
+**Expected Output:**
+```
+Nodo P2P iniciado. ID: 3a1f88b5e2d4, escuchando en puerto 6882.
+Conectando con peer inicial 127.0.0.1:6881...
+Meta de archivo recibida: "video.mkv" (157286400 bytes, 2400 piezas). Iniciando descarga...
+Recibido mapa de piezas de peer ab12cd34ef56: 2400 piezas disponibles.
+Solicitando pieza 0 al peer ab12cd34ef56.
+Pieza 0 recibida (65536 bytes). Piezas restantes: 2399.
+Progreso: 2.73% (4325376/157286400 bytes). Velocidad: 850.5 KB/s
+...
+¡Descarga completada! Archivo "video.mkv" descargado completamente.
+Verificación de integridad: OK (hash coincide).
+El nodo continuará corriendo como seed para compartir el archivo con otros peers.
+```
+
+---
+
+## Example 1: Sharing a Large Video File Between 3 Peers
+
+This example demonstrates a realistic scenario with one seeder and two leechers downloading a 150 MB video file.
+
+<Steps>
+  <Step title="Start the Seeder">
+    Open Terminal 1 and start the seed node with the complete file:
+    
+    ```bash
+    npm start -- --port 6881 --file "/home/user/videos/movie.mkv"
+    ```
+    
+    The seeder will:
+    - Calculate the SHA-1 hash of the file
+    - Divide it into pieces (64 KiB each)
+    - Start listening for incoming connections
+    
+    **Output:**
+    ```
+    Nodo P2P iniciado. ID: a1b2c3d4e5f6, escuchando en puerto 6881.
+    Archivo disponible para compartir: "movie.mkv" (157286400 bytes). Esperando conexiones de pares...
+    ```
+  </Step>
+  
+  <Step title="Start First Leecher">
+    Open Terminal 2 and start the first leecher:
+    
+    ```bash
+    npm run leech -- --port 6882 --file "/home/user/downloads/movie.mkv" --peer 127.0.0.1:6881
+    ```
+    
+    **What happens:**
+    - Leecher connects to the seeder on port 6881
+    - Exchanges handshake with file metadata
+    - Receives bitfield showing all pieces available
+    - Starts requesting pieces sequentially
+    
+    **Output:**
+    ```
+    Nodo P2P iniciado. ID: f6e5d4c3b2a1, escuchando en puerto 6882.
+    Conectando con peer inicial 127.0.0.1:6881...
+    Meta de archivo recibida: "movie.mkv" (157286400 bytes, 2400 piezas). Iniciando descarga...
+    Recibido mapa de piezas de peer a1b2c3d4e5f6: 2400 piezas disponibles.
+    Solicitando pieza 0 al peer a1b2c3d4e5f6.
+    Pieza 0 recibida (65536 bytes). Piezas restantes: 2399.
+    Progreso: 5.00% (7864320/157286400 bytes). Velocidad: 1024.0 KB/s
+    ```
+  </Step>
+  
+  <Step title="Start Second Leecher">
+    Open Terminal 3 and start the second leecher:
+    
+    ```bash
+    npm run leech -- --port 6883 --file "/home/user/downloads/movie2.mkv" --peer 127.0.0.1:6881
+    ```
+    
+    **What happens:**
+    - Second leecher connects to the original seeder
+    - Seeder sends peer exchange message with first leecher's address
+    - Second leecher discovers first leecher via PEX
+    - Both leechers can now download pieces from each other
+    
+    **Seeder Terminal Output:**
+    ```
+    Peer f6e5d4c3b2a1 ha obtenido la pieza 45.
+    Peer b1c2d3e4f5a6 ha obtenido la pieza 0.
+    ```
+    
+    **Second Leecher Output:**
+    ```
+    Descubierto peer f6e5d4c3b2a1 en 127.0.0.1:6882, iniciando conexión...
+    Recibido mapa de piezas de peer f6e5d4c3b2a1: 120 piezas disponibles.
+    ```
+  </Step>
+  
+  <Step title="Monitor Progress">
+    Both leechers will show progress updates every second:
+    
+    ```
+    Progreso: 25.50% (40097894/157286400 bytes). Velocidad: 980.2 KB/s
+    Progreso: 50.00% (78643200/157286400 bytes). Velocidad: 1150.7 KB/s
+    Progreso: 75.25% (118389864/157286400 bytes). Velocidad: 1089.4 KB/s
+    ```
+  </Step>
+  
+  <Step title="Verify Completion">
+    When download completes, you'll see:
+    
+    ```
+    ¡Descarga completada! Archivo "movie.mkv" descargado completamente.
+    Verificación de integridad: OK (hash coincide).
+    El nodo continuará corriendo como seed para compartir el archivo con otros peers.
+    ```
+    
+    The completed leecher automatically becomes a seeder and continues sharing.
+  </Step>
+</Steps>
+
+<Tip>
+  As leechers complete downloading pieces, they immediately share those pieces with other peers, accelerating the overall distribution.
+</Tip>
+
+---
+
+## Example 2: Local Network File Distribution
+
+Distribute a file across multiple machines on a local network.
+
+### Scenario
+You need to distribute a 500 MB software package to 5 computers in your office.
+
+<Steps>
+  <Step title="Start Seeder on Server">
+    On the server machine (IP: 192.168.1.100):
+    
+    ```bash
+    npm start -- --port 6881 --file "/opt/software/package-v2.0.tar.gz"
+    ```
+  </Step>
+  
+  <Step title="Connect First Client">
+    On client machine 1:
+    
+    ```bash
+    npm run leech -- --port 6881 --file "/tmp/package-v2.0.tar.gz" --peer 192.168.1.100:6881
+    ```
+    
+    <Warning>
+      Ensure firewall allows incoming connections on port 6881 for all machines.
+    </Warning>
+  </Step>
+  
+  <Step title="Connect Remaining Clients">
+    On clients 2-5, run the same command (all can use the same port since they're on different machines):
+    
+    ```bash
+    npm run leech -- --port 6881 --file "/tmp/package-v2.0.tar.gz" --peer 192.168.1.100:6881
+    ```
+    
+    Each client will automatically discover other peers through peer exchange and download from multiple sources simultaneously.
+  </Step>
+</Steps>
+
+**Benefits:**
+- Server bandwidth is shared across all clients
+- Clients that finish downloading help distribute to slower clients
+- No single point of failure after initial pieces are distributed
+
+---
+
+## Example 3: Testing with Localhost
+
+Test the P2P system on a single machine using different ports.
+
+### Multiple Peers on Same Machine
+
+```bash
+# Terminal 1: Seeder
+npm start -- --port 6881 --file "./test-data/sample.pdf"
+
+# Terminal 2: Leecher 1
+npm run leech -- --port 6882 --file "./downloads/sample1.pdf" --peer 127.0.0.1:6881
+
+# Terminal 3: Leecher 2
+npm run leech -- --port 6883 --file "./downloads/sample2.pdf" --peer 127.0.0.1:6881
+
+# Terminal 4: Leecher 3
+npm run leech -- --port 6884 --file "./downloads/sample3.pdf" --peer 127.0.0.1:6882
+```
+
+**Note:** Leecher 3 connects to Leecher 1 (port 6882) instead of the seeder, demonstrating peer exchange.
+
+**Expected Behavior:**
+- All leechers will discover each other through PEX messages
+- Each leecher can download from any peer that has pieces
+- The seeder console shows piece notifications from all leechers
+
+---
+
+## Example 4: Large File with Custom Piece Size
+
+For very large files (10+ GB), the default 64 KiB piece size is still appropriate, but you can observe how the system handles many pieces.
+
+```bash
+# Seeder with a 10 GB file
+npm start -- --port 6881 --file "/data/large-dataset.tar"
+```
+
+**Automatic Calculations:**
+- File size: 10,737,418,240 bytes (10 GB)
+- Piece size: 65,536 bytes (64 KiB)
+- Total pieces: 163,840 pieces
+
+**Console Output:**
+```
+Meta de archivo recibida: "large-dataset.tar" (10737418240 bytes, 163840 piezas). Iniciando descarga...
+Progreso: 0.01% (1310720/10737418240 bytes). Velocidad: 850.3 KB/s
+```
+
+---
+
+## Example 5: Small File Optimization
+
+For files smaller than 64 KiB, the system automatically adjusts the piece size.
+
+```bash
+npm start -- --port 6881 --file "./small-config.json"
+```
+
+**If file is 4096 bytes:**
+- Automatic adjustment: piece size = 4096 bytes
+- Total pieces: 1
+- Single-piece transfer
+
+---
+
+## Command Line Reference
+
+### Required Arguments
+
+| Argument | Description | Example |
+|----------|-------------|----------|
+| `--port` | TCP port to listen on | `--port 6881` |
+| `--file` | File path (source for seed, destination for leech) | `--file "/path/to/file.ext"` |
+
+### Optional Arguments
+
+| Argument | Description | Example |
+|----------|-------------|----------|
+| `--peer` | Initial peer to connect to (host:port) | `--peer 192.168.1.100:6881` |
+
+<Tip>
+  Use quotes around file paths that contain spaces or special characters.
+</Tip>
+
+---
+
+## Common Patterns
+
+### Pattern 1: Sequential Ports
+When running multiple peers on the same machine, increment ports:
+```bash
+6881, 6882, 6883, 6884...
+```
+
+### Pattern 2: Dedicated Seeder
+Keep at least one seeder running continuously:
+```bash
+nohup npm start -- --port 6881 --file "/data/shared.tar" > seeder.log 2>&1 &
+```
+
+### Pattern 3: Peer Exchange Chain
+Connect new peers to leechers instead of seeder to test PEX:
+```bash
+# New peer connects to leecher, discovers seeder via PEX
+npm run leech -- --port 6885 --file "./output.tar" --peer 127.0.0.1:6882
+```

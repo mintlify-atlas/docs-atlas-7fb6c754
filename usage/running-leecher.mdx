@@ -1,0 +1,222 @@
+---
+title: "Running a Leecher Node"
+description: "Learn how to download files from the P2P network as a leecher"
+---
+
+## What is a Leecher?
+
+A leecher is a peer that is downloading a file from the network. It connects to other peers (seeds or other leechers) to request and download file pieces. Key characteristics:
+
+- Starts with no file pieces (empty bitfield)
+- Connects to an initial peer using the `--peer` flag
+- Downloads pieces from available peers
+- Becomes a seed automatically after completing the download
+- Can share downloaded pieces with other leechers even before completion
+
+## Starting a Leecher Node
+
+<Steps>
+  <Step title="Identify an initial peer">
+    You need the host and port of at least one seed or leecher that has the file. For example: `127.0.0.1:6881`
+  </Step>
+
+  <Step title="Start the leecher using npm script">
+    Use the `leech` npm script to start downloading:
+
+    ```bash
+    npm run leech -- --port 6882 --file ./output.ext --peer 127.0.0.1:6881
+    ```
+
+    Or use the main command directly:
+
+    ```bash
+    npm start -- --port 6882 --file "/ruta/de/salida.ext" --peer 127.0.0.1:6881
+    ```
+  </Step>
+
+  <Step title="Monitor download progress">
+    The leecher will display real-time progress:
+
+    ```
+    Conectando con peer inicial 127.0.0.1:6881...
+    Meta de archivo recibida: "video.mkv" (150000000 bytes, 2286 piezas). Iniciando descarga...
+    Progreso: 10.00% (15000000/150000000 bytes). Velocidad: 800.0 KB/s
+    Pieza 0 recibida (65536 bytes). Piezas restantes: 2285.
+    ```
+  </Step>
+
+  <Step title="Wait for completion">
+    When all pieces are downloaded, the leecher verifies the file integrity:
+
+    ```
+    ¡Descarga completada! Archivo "video.mkv" descargado completamente.
+    Verificación de integridad: OK (hash coincide).
+    El nodo continuará corriendo como seed para compartir el archivo con otros peers.
+    ```
+  </Step>
+</Steps>
+
+## Command-Line Usage
+
+The basic syntax for starting a leecher is:
+
+```bash
+node src/peer.js --port <puerto> --file <rutaArchivo> --peer <host:puerto>
+```
+
+### Example: Downloading from a local seed
+
+```bash
+node src/peer.js --port 6882 --file "./downloads/video.mkv" --peer 127.0.0.1:6881
+```
+
+### Example: Downloading from a remote peer
+
+```bash
+node src/peer.js --port 6883 --file "./movie.mp4" --peer 192.168.1.100:6881
+```
+
+## Console Output
+
+Here's what you'll see when running as a leecher:
+
+**Initial connection:**
+```
+Conectando con peer inicial 127.0.0.1:6881...
+Meta de archivo recibida: "video.mkv" (150000000 bytes, 2286 piezas). Iniciando descarga...
+```
+
+**During download (every second):**
+```
+Progreso: 10.00% (15000000/150000000 bytes). Velocidad: 800.0 KB/s
+Pieza 0 recibida (65536 bytes). Piezas restantes: 2285.
+```
+
+**After completion:**
+```
+¡Descarga completada! Archivo "video.mkv" descargado completamente.
+Verificación de integridad: OK (hash coincide).
+El nodo continuará corriendo como seed para compartir el archivo con otros peers.
+```
+
+## How Leechers Become Seeds
+
+When a leecher completes the download, it automatically transitions to seed mode. This happens in `src/node.js:368-394`:
+
+```javascript
+if (this.missingPieces.size === 0) {
+    // Descarga terminada
+    console.log(`¡Descarga completada! Archivo "${this.fileName}" descargado completamente.`);
+    // Detener intervalo de progreso
+    if (this.progressInterval) {
+        clearInterval(this.progressInterval);
+        this.progressInterval = null;
+    }
+    // Verificar integridad del archivo comparando hash
+    if (this.fileHash) {
+        try {
+            const downloadedHash = await this.fileManager.computeHash();
+            if (downloadedHash === this.fileHash) {
+                console.log('Verificación de integridad: OK (hash coincide).');
+            } else {
+                console.warn('Advertencia: el hash del archivo descargado difiere del esperado.');
+            }
+        } catch (err) {
+            console.error('No se pudo verificar el hash del archivo descargado:', err);
+        }
+    }
+    console.log('El nodo continuará corriendo como seed para compartir el archivo con otros peers.');
+    // Marcar estado como seeder a partir de ahora
+    this.isSeed = true;
+}
+```
+
+After becoming a seed:
+- The node continues accepting connections
+- It can serve pieces to other leechers
+- It participates in peer exchange (PEX)
+
+## Progress Tracking
+
+The leecher displays download progress every second, showing:
+
+- **Percentage complete**: `(bytesDone / fileSize) * 100`
+- **Bytes downloaded**: Total bytes written to disk
+- **Download speed**: Average KB/s since start
+
+This is implemented in `src/node.js:506-524`:
+
+```javascript
+_startProgressInterval() {
+    if (this.progressInterval) return;
+    this.progressInterval = setInterval(() => {
+        if (!this.fileSize) return;
+        const bytesDone = this.fileSize - (this.missingPieces.size * this.pieceSize);
+        const percent = ((bytesDone / this.fileSize) * 100).toFixed(2);
+        let speedStr = '';
+        if (this.startTime) {
+            const elapsed = (Date.now() - this.startTime) / 1000;
+            if (elapsed > 0) {
+                const speed = bytesDone / elapsed; // bytes por segundo
+                const speedKB = speed / 1024;
+                speedStr = `Velocidad: ${speedKB.toFixed(1)} KB/s`;
+            }
+        }
+        console.log(`Progreso: ${percent}% (${bytesDone}/${this.fileSize} bytes). ${speedStr}`);
+    }, 1000);
+}
+```
+
+## Peer Exchange (PEX)
+
+<Tip>
+Leechers automatically discover additional peers through Peer Exchange. When you connect to one seed, it shares addresses of other connected peers, allowing you to download from multiple sources simultaneously.
+</Tip>
+
+Peer exchange works as follows:
+
+1. **Initial connection**: You connect to one peer using `--peer`
+2. **Peer list received**: The initial peer sends a list of other connected peers
+3. **Automatic connections**: Your node connects to newly discovered peers
+4. **Anti-collision rule**: Only the peer with the higher ID initiates the connection (prevents duplicate connections)
+
+This is handled in `src/node.js:414-433`:
+
+```javascript
+_handlePeers(socket, message) {
+    const peersList = message.peers;
+    for (let peer of peersList) {
+        const { id: peerId, host, port } = peer;
+        if (peerId === this.id) continue;
+        if (!this.knownPeers.has(peerId)) {
+            this.knownPeers.set(peerId, { 
+                id: peerId, host: host, port: port, 
+                socket: null, availablePieces: new Set(), busy: false 
+            });
+            // Solo el peer con ID mayor inicia la conexión
+            if (this._shouldInitiateConnection(peerId)) {
+                console.log(`Descubierto peer ${peerId} en ${host}:${port}, iniciando conexión...`);
+                this.connectToPeer(host, port);
+            }
+        }
+    }
+}
+```
+
+## File Verification
+
+After downloading all pieces, the leecher calculates the SHA-1 hash of the complete file and compares it with the hash received from the seed during the handshake.
+
+**If hashes match:**
+```
+Verificación de integridad: OK (hash coincide).
+```
+
+**If hashes don't match:**
+```
+Advertencia: el hash del archivo descargado difiere del esperado. El archivo podría estar corrupto.
+```
+
+<Warning>
+If the integrity check fails, the downloaded file may be corrupted. This could happen due to network errors or if peers are sharing different versions of the file.
+</Warning>

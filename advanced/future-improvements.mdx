@@ -1,0 +1,423 @@
+---
+title: Future Improvements
+description: Potential enhancements to the P2P file sharing system
+---
+
+## Overview
+
+This page outlines potential improvements and features that could enhance the P2P file sharing system. These are **not currently implemented** but represent opportunities for future development.
+
+<Warning>
+  These are proposed enhancements, not existing features. The current implementation provides a solid foundation for basic P2P file sharing.
+</Warning>
+
+---
+
+## Piece Selection Strategies
+
+### Rarest-First Strategy
+
+**Current Implementation:**
+The system currently requests pieces sequentially without prioritization.
+
+**Proposed Enhancement:**
+Implement a "rarest-first" piece selection algorithm where peers prioritize downloading pieces that are least common in the swarm.
+
+**Benefits:**
+- Better piece distribution across the network
+- Reduces risk of a piece becoming unavailable if seeders leave
+- Improves overall swarm health
+- Faster distribution in scenarios with limited seeders
+
+**Technical Approach:**
+```javascript
+// Proposed implementation in _scheduleRequests()
+function selectRarestPiece(availablePieces, peerAvailability) {
+  let rarest = null;
+  let minCount = Infinity;
+  
+  for (let piece of this.missingPieces) {
+    let count = 0;
+    for (let peer of this.knownPeers.values()) {
+      if (peer.availablePieces.has(piece)) count++;
+    }
+    if (count < minCount && count > 0) {
+      minCount = count;
+      rarest = piece;
+    }
+  }
+  
+  return rarest;
+}
+```
+
+### Random First for Initial Pieces
+
+Prioritize random piece selection when a leecher first starts to increase piece diversity quickly.
+
+---
+
+## Bandwidth Management
+
+### Choking and Unchoking
+
+**Current Implementation:**
+All connected peers can request and receive pieces without limits.
+
+**Proposed Enhancement:**
+Implement choking mechanisms to manage upload bandwidth and incentivize fair sharing.
+
+**Features:**
+- Limit simultaneous uploads to N peers (e.g., 4 peers)
+- Rotate unchoked peers every 10-30 seconds
+- Implement "optimistic unchoking" to discover faster peers
+- Prefer peers with better upload/download ratios
+
+**Benefits:**
+- Prevents bandwidth saturation
+- Encourages reciprocal sharing (tit-for-tat)
+- Improves performance for all peers
+- Reduces network congestion
+
+<Card title="BitTorrent-style Choking" icon="exchange">
+  Traditional BitTorrent uses choking to create a "tit-for-tat" economy where peers that upload to you are prioritized for downloads.
+</Card>
+
+---
+
+## Connection Resilience
+
+### Timeout Mechanisms
+
+**Current Limitation:**
+No explicit timeouts for piece requests. If a peer stops responding, the piece remains in `pendingPieces` until connection closes.
+
+**Proposed Enhancement:**
+- Set timeout for piece requests (e.g., 30 seconds)
+- Re-request timed-out pieces from other peers
+- Track peer response times and prioritize faster peers
+
+```javascript
+// Proposed timeout tracking
+class Node {
+  constructor() {
+    this.pieceTimeouts = new Map(); // pieceIndex -> timestamp
+  }
+  
+  _sendRequest(socket, index) {
+    this.pieceTimeouts.set(index, Date.now());
+    // ... existing code
+  }
+  
+  _checkTimeouts() {
+    const now = Date.now();
+    for (let [index, timestamp] of this.pieceTimeouts) {
+      if (now - timestamp > 30000) { // 30 second timeout
+        this.pendingPieces.delete(index);
+        this.pieceTimeouts.delete(index);
+        this._scheduleRequests(); // Re-request
+      }
+    }
+  }
+}
+```
+
+### Automatic Reconnection
+
+**Proposed Enhancement:**
+- Automatically attempt to reconnect to known peers if connection drops
+- Implement exponential backoff for reconnection attempts
+- Maintain a list of previously successful peer addresses
+- Persist peer list to disk for recovery after crashes
+
+---
+
+## Security Enhancements
+
+### Encryption and TLS Support
+
+**Current Limitation:**
+All communication is unencrypted plain TCP with JSON messages.
+
+**Proposed Enhancement:**
+Implement TLS encryption for peer connections.
+
+**Implementation:**
+```javascript
+const tls = require('tls');
+
+// Replace net.createServer with tls.createServer
+this.server = tls.createServer({
+  key: fs.readFileSync('private-key.pem'),
+  cert: fs.readFileSync('certificate.pem')
+}, socket => {
+  // ... existing socket handling
+});
+
+// Replace net.connect with tls.connect
+const socket = tls.connect(port, host, {
+  rejectUnauthorized: false // or implement cert verification
+}, () => {
+  // ... existing connection handling
+});
+```
+
+**Benefits:**
+- Protects file data from eavesdropping
+- Prevents man-in-the-middle attacks
+- Ensures data integrity during transmission
+
+<Warning>
+  TLS adds computational overhead and would slightly reduce transfer speeds.
+</Warning>
+
+### Peer Authentication
+
+**Proposed Enhancement:**
+- Implement peer identity verification
+- Use public key cryptography for authentication
+- Prevent unauthorized peers from joining swarms
+- Optional: require shared secret for private swarms
+
+---
+
+## Data Integrity
+
+### Per-Piece Hash Verification
+
+**Current Implementation:**
+Only the complete file hash is verified after full download.
+
+**Proposed Enhancement:**
+Calculate and verify hash for each individual piece upon receipt.
+
+**Benefits:**
+- Early detection of corrupted pieces
+- Re-request corrupted pieces immediately
+- No need to re-download entire file if corruption detected
+- Better resilience to network errors
+
+**Technical Approach:**
+```javascript
+// During file preparation (seeder)
+class Manager {
+  async computePieceHashes() {
+    this.pieceHashes = [];
+    for (let i = 0; i < this.numPieces; i++) {
+      const buffer = await this.readPiece(i);
+      const hash = crypto.createHash('sha1')
+        .update(buffer)
+        .digest('hex');
+      this.pieceHashes.push(hash);
+    }
+    return this.pieceHashes;
+  }
+}
+
+// During piece receipt (leecher)
+async _handlePiece(socket, message) {
+  const index = message.index;
+  const dataBuffer = Buffer.from(message.data, 'base64');
+  
+  // Verify piece hash before writing
+  const receivedHash = crypto.createHash('sha1')
+    .update(dataBuffer)
+    .digest('hex');
+  
+  if (receivedHash !== this.pieceHashes[index]) {
+    console.warn(`Piece ${index} hash mismatch! Re-requesting...`);
+    this.pendingPieces.delete(index);
+    return; // Don't write corrupted piece
+  }
+  
+  await this.fileManager.writePiece(index, dataBuffer);
+  // ... existing code
+}
+```
+
+### Merkle Tree Verification
+
+For very large files, implement Merkle tree-based verification for efficient partial verification.
+
+---
+
+## Performance Optimizations
+
+### Large File Handling
+
+**Current Implementation:**
+Works well for files up to several GB, but could be optimized for very large files (100+ GB).
+
+**Proposed Enhancements:**
+
+1. **Dynamic Piece Size:**
+   - Adjust piece size based on file size
+   - Larger files → larger pieces (e.g., 256 KiB or 1 MiB)
+   - Reduces overhead from excessive piece count
+
+2. **Piece Pipelining:**
+   - Request multiple pieces from same peer simultaneously
+   - Reduce round-trip latency impact
+   - Currently only one piece per peer at a time
+
+3. **Streaming Support:**
+   - Enable playback/use of file while still downloading
+   - Prioritize pieces in sequential order when requested
+   - Useful for video streaming scenarios
+
+### Memory Optimization
+
+**Proposed Enhancements:**
+- Stream piece data instead of loading entire pieces into memory
+- Implement piece caching with LRU eviction
+- Use memory-mapped files for large file operations
+
+---
+
+## Protocol Enhancements
+
+### Extended Messaging
+
+**Current Protocol Messages:**
+- `handshake`, `bitfield`, `request`, `piece`, `have`, `peers`
+
+**Proposed Additional Messages:**
+
+1. **`cancel`** - Cancel a pending piece request
+   ```javascript
+   { type: 'cancel', index: 42 }
+   ```
+
+2. **`port`** - Advertise DHT port (future DHT support)
+   ```javascript
+   { type: 'port', port: 6881 }
+   ```
+
+3. **`keepalive`** - Maintain connection during idle periods
+   ```javascript
+   { type: 'keepalive' }
+   ```
+
+4. **`metadata`** - Exchange additional file metadata
+   ```javascript
+   { 
+     type: 'metadata', 
+     fileName: 'video.mkv',
+     contentType: 'video/x-matroska',
+     creationDate: '2026-03-06'
+   }
+   ```
+
+### Compression
+
+**Proposed Enhancement:**
+Compress piece data before transmission for text/compressible files.
+
+```javascript
+const zlib = require('zlib');
+
+// Before sending
+const compressed = zlib.gzipSync(dataBuffer);
+const pieceMsg = {
+  type: 'piece',
+  index: index,
+  data: compressed.toString('base64'),
+  compressed: true
+};
+```
+
+---
+
+## Advanced Features
+
+### Distributed Hash Table (DHT)
+
+**Current Limitation:**
+Requires at least one known peer to bootstrap. No peer discovery mechanism.
+
+**Proposed Enhancement:**
+Implement a DHT for decentralized peer discovery.
+
+**Benefits:**
+- No need for initial peer addresses
+- Peers can find each other automatically
+- Improved network resilience
+- Truly distributed architecture
+
+### Tracker Support
+
+**Proposed Enhancement:**
+Optional tracker support for centralized peer discovery (alongside PEX).
+
+**Use Cases:**
+- Easier coordination in managed networks
+- Faster initial peer discovery
+- Statistics and monitoring capabilities
+
+### Magnet Links
+
+**Proposed Enhancement:**
+Support for magnet URI scheme for easy file sharing.
+
+```
+magnet:?xt=urn:sha1:a1b2c3d4e5f6&dn=movie.mkv&xl=157286400
+```
+
+### Web Interface
+
+Provide a web-based UI for monitoring and controlling the P2P node.
+
+**Features:**
+- Real-time download progress
+- Connected peers visualization
+- Bandwidth usage graphs
+- File management
+
+---
+
+## Monitoring and Diagnostics
+
+### Enhanced Logging
+
+**Proposed Enhancements:**
+- Structured logging with log levels (DEBUG, INFO, WARN, ERROR)
+- Log rotation and archival
+- Export logs in JSON format for analysis
+- Performance metrics logging
+
+### Statistics Dashboard
+
+**Proposed Metrics:**
+- Total bytes uploaded/downloaded
+- Per-peer transfer rates
+- Piece availability distribution
+- Network topology visualization
+- Average piece download time
+- Connection uptime statistics
+
+---
+
+## Multi-File Support
+
+**Current Limitation:**
+One swarm per file. Multi-file torrents not supported.
+
+**Proposed Enhancement:**
+Support sharing directories or multiple files as a single "torrent".
+
+**Technical Approach:**
+- Create manifest file listing all files and their offsets
+- Map pieces across multiple files
+- Allow selective file downloading
+
+---
+
+## Contributing
+
+Interested in implementing any of these features? Contributions are welcome!
+
+<Tip>
+  Start with simpler enhancements like timeouts or per-piece hashing before tackling complex features like DHT or encryption.
+</Tip>
+
+The current implementation provides a solid foundation that demonstrates core P2P concepts. These improvements would make it production-ready and feature-complete.

@@ -1,0 +1,141 @@
+---
+title: "Running a Seed Node"
+description: "Learn how to run a seed node to share files with the P2P network"
+---
+
+## What is a Seed Node?
+
+A seed node is a peer that has the complete file and shares it with other peers in the network. When you start a seed node, it:
+
+- Opens a TCP server on the specified port to accept incoming connections
+- Calculates the SHA-1 hash of the file for verification
+- Divides the file into pieces (64 KiB by default)
+- Waits for leechers to connect and request pieces
+
+<Note>
+The seed node automatically calculates and verifies the file hash during startup. For files smaller than 64 KiB, the piece size is automatically adjusted to match the file size.
+</Note>
+
+## Starting a Seed Node
+
+<Steps>
+  <Step title="Prepare the file">
+    Ensure the file you want to share exists on your system. The seed node requires read access to this file.
+  </Step>
+
+  <Step title="Start the seed using npm script">
+    Use the `seed` npm script to start sharing a file:
+
+    ```bash
+    npm run seed -- --port 6881 --file ./path/to/file.ext
+    ```
+
+    Or use the `start` script directly:
+
+    ```bash
+    npm start -- --port 6881 --file "/ruta/al/archivo.ext"
+    ```
+  </Step>
+
+  <Step title="Verify the seed is running">
+    You should see output similar to:
+
+    ```
+    Nodo P2P iniciado. ID: ab12cd34ef56, escuchando en puerto 6881.
+    Archivo disponible para compartir: "video.mkv" (150000000 bytes). Esperando conexiones de pares...
+    ```
+  </Step>
+
+  <Step title="Monitor peer connections">
+    As leechers connect and download pieces, you'll see messages like:
+
+    ```
+    Peer 3a1f88b5e2d4 ha obtenido la pieza 0.
+    ```
+  </Step>
+</Steps>
+
+## Command-Line Usage
+
+The basic syntax for starting a seed node is:
+
+```bash
+node src/peer.js --port <puerto> --file <rutaArchivo>
+```
+
+### Example: Sharing a video file
+
+```bash
+node src/peer.js --port 6881 --file "video.mkv"
+```
+
+### Example: Using absolute paths
+
+```bash
+node src/peer.js --port 6881 --file "/home/user/files/document.pdf"
+```
+
+## Console Output
+
+When running as a seed, you'll see the following output:
+
+**Initial startup:**
+```
+Nodo P2P iniciado. ID: ab12cd34ef56 escuchar en puerto 6881.
+Archivo disponible: "video.mkv" (150 MB). Esperando conexiones...
+```
+
+**When peers connect and download:**
+```
+Peer 3a1f88b5e2d4 obtuvo la pieza 0.
+Recibido mapa de piezas de peer 3a1f88b5e2d4: 0 piezas disponibles.
+```
+
+## File Verification and Hash Calculation
+
+<Note>
+The seed node automatically calculates the SHA-1 hash of the complete file during initialization. This hash is shared with leechers during the handshake to ensure file integrity.
+</Note>
+
+The hash calculation happens in `src/node.js:56-60`:
+
+```javascript
+try {
+    this.fileHash = await this.fileManager.computeHash();
+} catch (err) {
+    console.error('Error calculando hash del archivo:', err);
+    process.exit(1);
+}
+```
+
+This ensures that:
+- All peers are sharing the same file
+- Leechers can verify the downloaded file integrity
+- The network rejects peers trying to share different files
+
+## Technical Details
+
+### Piece Size
+
+By default, files are divided into 64 KiB (65,536 bytes) pieces. This is defined in `src/node.js:13`:
+
+```javascript
+this.pieceSize = 65536; // Tamaño de cada pieza en bytes (64 KiB por defecto)
+```
+
+### Number of Pieces
+
+The total number of pieces is calculated as:
+
+```javascript
+this.numPieces = Math.ceil(this.fileSize / this.pieceSize);
+```
+
+For a 150 MB file:
+- File size: 157,286,400 bytes
+- Piece size: 65,536 bytes
+- Number of pieces: 2,400 pieces
+
+<Warning>
+Make sure the port you specify is not blocked by your firewall and is available for incoming connections. The seed node must accept TCP connections from leechers.
+</Warning>

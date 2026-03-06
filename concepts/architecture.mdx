@@ -1,0 +1,266 @@
+---
+title: 'Architecture Overview'
+description: 'Understand the P2P architecture and core components of the file-sharing system'
+---
+
+## System Architecture
+
+The p2p-file-share system implements a **pure P2P architecture** inspired by BitTorrent, where every node acts as both client and server. There are no central trackers or servers - peers discover each other through peer exchange (PEX) and share files directly.
+
+<Note>
+  This is a decentralized system where all nodes have equal status and can both download and upload file pieces simultaneously.
+</Note>
+
+## Core Modules
+
+The system is built around three main modules that handle different aspects of the P2P functionality:
+
+<CardGroup cols={3}>
+  <Card title="peer.js" icon="terminal">
+    **Entry Point**
+    
+    Parses command-line arguments and bootstraps the P2P node. Handles initialization and connects to the initial peer if specified.
+  </Card>
+  
+  <Card title="node.js" icon="network-wired">
+    **P2P Logic**
+    
+    Core networking layer that manages TCP connections, implements the messaging protocol, and orchestrates piece exchange between peers.
+  </Card>
+  
+  <Card title="manager.js" icon="file">
+    **File Manager**
+    
+    Handles low-level file operations including reading/writing pieces, computing SHA-1 hashes, and managing file descriptors.
+  </Card>
+</CardGroup>
+
+### peer.js - Entry Point
+
+The `peer.js` module serves as the command-line interface and initialization layer:
+
+```javascript
+const node = new Node({ port: port, filePath: filePath });
+node.startListening();
+
+// If an initial peer is specified, connect to it
+if (peerHost && peerPort) {
+    console.log(`Conectando con peer inicial ${peerHost}:${peerPort}...`);
+    node.connectToPeer(peerHost, peerPort);
+}
+```
+
+**Responsibilities:**
+- Parse command-line arguments (`--port`, `--file`, `--peer`)
+- Validate required parameters
+- Create and start the Node instance
+- Initiate connection to bootstrap peer if provided
+
+### node.js - P2P Networking Core
+
+The `node.js` module implements the complete P2P protocol and connection management:
+
+```javascript
+class Node {
+    constructor(options) {
+        this.port = options.port;                            // TCP listening port
+        this.filePath = options.filePath;                    // File path (seed: existing, leecher: destination)
+        this.id = crypto.randomBytes(8).toString('hex');     // Unique 16-char hex peer ID
+        this.knownPeers = new Map();                         // Known peers (key: peer ID, value: peer info)
+        this.fileManager = null;                             // File manager for piece I/O
+        this.havePieces = new Set();                         // Piece indices this node has
+        this.missingPieces = new Set();                      // Piece indices still needed
+        this.pendingPieces = new Set();                      // Piece indices currently being requested
+        // ...
+    }
+}
+```
+
+**Key Responsibilities:**
+- Create TCP server to accept incoming connections
+- Establish outgoing connections to known peers
+- Implement message protocol (handshake, bitfield, request, piece, have, peers)
+- Track piece availability across all connected peers
+- Schedule piece requests to maximize download efficiency
+- Report download progress and verify file integrity
+
+### manager.js - File Operations
+
+The `manager.js` module abstracts all file I/O operations:
+
+```javascript
+class Manager {
+    constructor(filePath, mode, pieceSize) {
+        this.filePath = filePath;                          // File path
+        this.pieceSize = pieceSize;                        // Piece size in bytes
+        this.fileHandle = null;                            // Node.js FileHandle
+        this.fileSize = 0;                                 // Total file size
+        this.mode = mode;                                  // 'r' (read) or 'w+' (read/write)
+    }
+    
+    async readPiece(index) {
+        const offset = index * this.pieceSize;
+        let length = this.pieceSize;
+        if (offset + length > this.fileSize) {
+            length = this.fileSize - offset;
+        }
+        const buffer = Buffer.alloc(length);
+        await this.fileHandle.read(buffer, 0, length, offset);
+        return buffer;
+    }
+}
+```
+
+**Key Operations:**
+- Open files in read ('r') or write ('w+') mode
+- Read specific pieces by index
+- Write received pieces to disk
+- Compute SHA-1 hash of complete file for integrity verification
+
+## File Fragmentation Strategy
+
+<Info>
+  Files are divided into **64 KiB (65,536 bytes)** pieces by default. This size balances network efficiency with granular progress tracking.
+</Info>
+
+The fragmentation logic automatically adapts to file size:
+
+```javascript
+// Default piece size: 64 KiB
+this.pieceSize = 65536;
+
+// For files smaller than piece size, adjust to avoid empty pieces
+if (this.fileSize < this.pieceSize) {
+    this.pieceSize = this.fileSize;
+    this.fileManager.pieceSize = this.fileSize;
+}
+
+// Calculate total number of pieces
+this.numPieces = Math.ceil(this.fileSize / this.pieceSize);
+```
+
+**Benefits of piece-based transfer:**
+- **Parallel downloads**: Request different pieces from multiple peers simultaneously
+- **Resume capability**: Track which pieces are complete if connection drops
+- **Early sharing**: Start uploading pieces before download completes (become a leecher-seeder)
+- **Integrity**: Each piece can be validated independently (future enhancement)
+
+## Node Roles
+
+Every node in the network operates in one of two roles, with seamless transition:
+
+### Seeder
+
+A node that has the complete file:
+
+```javascript
+if (fs.existsSync(this.filePath)) {
+    this.isSeed = true;
+    // Mark all pieces as available
+    for (let i = 0; i < this.numPieces; i++) {
+        this.havePieces.add(i);
+    }
+    // Compute file hash for integrity verification
+    this.fileHash = await this.fileManager.computeHash();
+}
+```
+
+**Seeder characteristics:**
+- Has all pieces (complete bitfield)
+- Responds to piece requests from leechers
+- Shares metadata (fileName, fileSize, fileHash, pieceSize)
+- Participates in peer exchange to help leechers discover each other
+
+### Leecher
+
+A node downloading the file:
+
+```javascript
+if (!this.isSeed) {
+    // Initialize all pieces as missing
+    for (let i = 0; i < this.numPieces; i++) {
+        this.missingPieces.add(i);
+    }
+    this.havePieces = new Set();
+}
+```
+
+**Leecher characteristics:**
+- Starts with empty bitfield
+- Requests pieces from peers with availability
+- Sends 'have' messages as pieces are acquired
+- Becomes a seeder upon completion
+
+<Note>
+  When a leecher completes the download, it automatically becomes a seeder and continues sharing with other peers. This is called **transitioning to seed mode**.
+</Note>
+
+## Dual Client-Server Model
+
+Every node simultaneously:
+
+1. **Acts as a server** - Listens for incoming TCP connections:
+
+```javascript
+startListening() {
+    this.server = net.createServer(socket => {
+        socket.setEncoding('utf8');
+        socket.peerId = null;
+        socket.isOutgoing = false;  // Connection initiated by remote peer
+        this._setupSocketHandlers(socket);
+    });
+    this.server.listen(this.port, () => {
+        console.log(`Nodo P2P iniciado. ID: ${this.id}, escuchando en puerto ${this.port}.`);
+    });
+}
+```
+
+2. **Acts as a client** - Initiates outgoing connections:
+
+```javascript
+connectToPeer(host, port) {
+    const socket = net.connect(port, host, () => {
+        socket.setEncoding('utf8');
+        socket.isOutgoing = true;  // We initiated this connection
+        this._setupSocketHandlers(socket);
+        this._sendHandshake(socket);
+    });
+}
+```
+
+This architecture enables:
+- **Full mesh topology**: Any peer can connect to any other peer
+- **No single point of failure**: Loss of any peer doesn't stop the network
+- **Efficient distribution**: File pieces spread rapidly through the swarm
+
+## Architecture Diagram
+
+The system follows a distributed mesh architecture:
+
+![Architecture Diagram](.github/architecture.png)
+
+Key aspects shown:
+- Nodes establish TCP connections with multiple peers
+- Message flow includes handshake, bitfield, request, piece, have, and peers
+- Files are fragmented and distributed across the network
+- No central coordination point - fully decentralized
+
+## Summary
+
+<CardGroup cols={2}>
+  <Card title="Pure P2P Design" icon="circle-nodes">
+    No trackers or central servers required. Peer discovery through PEX.
+  </Card>
+  
+  <Card title="64 KiB Pieces" icon="puzzle-piece">
+    Files divided into manageable chunks for parallel transfer.
+  </Card>
+  
+  <Card title="Three Core Modules" icon="cubes">
+    Clean separation: CLI entry (peer.js), networking (node.js), file I/O (manager.js).
+  </Card>
+  
+  <Card title="Dual Role Nodes" icon="arrows-left-right">
+    Every node is both client and server, enabling efficient distribution.
+  </Card>
+</CardGroup>

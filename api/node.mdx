@@ -1,0 +1,357 @@
+---
+title: "Node Class"
+description: "Main P2P node class that handles connections and protocol"
+---
+
+The `Node` class is the core component of the P2P file sharing system. It manages TCP connections, implements the messaging protocol, and coordinates piece downloads and uploads.
+
+## Constructor
+
+Creates a new P2P node instance.
+
+```javascript
+const node = new Node({
+  port: 6881,
+  filePath: './shared/file.txt'
+});
+```
+
+<ParamField path="options.port" type="number" required>
+  TCP port for listening to incoming peer connections
+</ParamField>
+
+<ParamField path="options.filePath" type="string" required>
+  Path to the file. For seeders, this should be an existing file. For leechers, this is the destination path where the file will be downloaded.
+</ParamField>
+
+## Properties
+
+<ResponseField name="id" type="string">
+  Unique peer identifier (16 hexadecimal characters generated from 8 random bytes)
+</ResponseField>
+
+<ResponseField name="port" type="number">
+  TCP port for listening to connections
+</ResponseField>
+
+<ResponseField name="filePath" type="string">
+  Path to the file being shared or downloaded
+</ResponseField>
+
+<ResponseField name="fileName" type="string">
+  Name of the file (extracted from filePath or received from peer metadata)
+</ResponseField>
+
+<ResponseField name="fileSize" type="number">
+  Total file size in bytes
+</ResponseField>
+
+<ResponseField name="fileHash" type="string">
+  SHA-1 hash of the file content (used as content identifier)
+</ResponseField>
+
+<ResponseField name="pieceSize" type="number" default="65536">
+  Size of each piece in bytes (64 KiB by default). Automatically adjusted if file is smaller.
+</ResponseField>
+
+<ResponseField name="numPieces" type="number">
+  Total number of pieces the file is divided into
+</ResponseField>
+
+<ResponseField name="isSeed" type="boolean">
+  Indicates whether this node has the complete file
+</ResponseField>
+
+<ResponseField name="havePieces" type="Set<number>">
+  Set of piece indices that this node possesses
+</ResponseField>
+
+<ResponseField name="missingPieces" type="Set<number>">
+  Set of piece indices that are still needed for download
+</ResponseField>
+
+<ResponseField name="pendingPieces" type="Set<number>">
+  Set of piece indices that have been requested but not yet received
+</ResponseField>
+
+<ResponseField name="knownPeers" type="Map<string, PeerInfo>">
+  Map of known peers (key: peer ID, value: peer information object)
+</ResponseField>
+
+<ResponseField name="fileManager" type="Manager">
+  File manager instance for reading/writing pieces
+</ResponseField>
+
+## Connection Methods
+
+### startListening()
+
+Starts the TCP server to accept incoming peer connections.
+
+```javascript
+node.startListening();
+```
+
+This method:
+- Creates a TCP server on the specified port
+- Accepts incoming connections from other peers
+- Sets up socket handlers for each connection
+- Logs the node ID and listening port
+
+### connectToPeer(host, port)
+
+Establishes an outgoing connection to another peer.
+
+```javascript
+node.connectToPeer('192.168.1.100', 6881);
+```
+
+<ParamField path="host" type="string" required>
+  IP address or hostname of the peer
+</ParamField>
+
+<ParamField path="port" type="number" required>
+  TCP port of the peer
+</ParamField>
+
+This method:
+- Creates an outgoing TCP connection
+- Sends a handshake message upon connection
+- Sets up socket handlers
+- Handles connection errors
+
+## Protocol Methods
+
+### _sendHandshake(socket)
+
+Sends a handshake message containing file metadata.
+
+<ParamField path="socket" type="Socket" required>
+  TCP socket to send the handshake through
+</ParamField>
+
+```javascript
+// Handshake message structure
+{
+  type: 'handshake',
+  id: 'a1b2c3d4e5f6g7h8',
+  fileName: 'example.txt',
+  fileSize: 1048576,
+  fileHash: 'da39a3ee5e6b4b0d3255bfef95601890afd80709',
+  pieceSize: 65536,
+  port: 6881
+}
+```
+
+### _sendBitfield(socket)
+
+Sends a bitfield message indicating which pieces this node possesses.
+
+<ParamField path="socket" type="Socket" required>
+  TCP socket to send the bitfield through
+</ParamField>
+
+```javascript
+// Bitfield message structure
+{
+  type: 'bitfield',
+  pieces: [0, 1, 2, 5, 8]
+}
+```
+
+### _sendRequest(socket, index)
+
+Sends a request for a specific piece to a peer.
+
+<ParamField path="socket" type="Socket" required>
+  TCP socket of the peer to request from
+</ParamField>
+
+<ParamField path="index" type="number" required>
+  Zero-based index of the piece to request
+</ParamField>
+
+```javascript
+node._sendRequest(socket, 3);
+```
+
+## Message Handling Methods
+
+### _handleMessage(socket, message)
+
+Routes incoming messages to appropriate handlers based on message type.
+
+<ParamField path="socket" type="Socket" required>
+  TCP socket that received the message
+</ParamField>
+
+<ParamField path="message" type="object" required>
+  Parsed JSON message object
+</ParamField>
+
+Supported message types:
+- `handshake` - Initial peer identification and file metadata
+- `bitfield` - List of pieces a peer possesses
+- `request` - Request for a specific piece
+- `piece` - Piece data delivery
+- `have` - Notification that a peer acquired a new piece
+- `peers` - List of additional known peers
+
+### _handleHandshake(socket, message)
+
+Processes incoming handshake messages.
+
+```javascript:node.js:188-296
+// From src/node.js
+await this._handleHandshake(socket, message);
+```
+
+This method:
+- Validates peer ID (rejects if same as own ID)
+- Verifies file hash matches (disconnects if mismatch)
+- Adopts file metadata if this is a leecher
+- Exchanges peer lists for peer discovery
+- Sends bitfield if this node has pieces
+
+### _handleBitfield(socket, message)
+
+Processes bitfield messages containing peer's available pieces.
+
+```javascript:node.js:298-307
+// Updates peer's available pieces and schedules requests
+const pieces = message.pieces;
+peerInfo.availablePieces = new Set(pieces);
+this._scheduleRequests();
+```
+
+### _handleRequest(socket, message)
+
+Processes piece request messages from peers.
+
+```javascript:node.js:309-330
+// Reads requested piece and sends it to the peer
+const index = message.index;
+const buffer = await this.fileManager.readPiece(index);
+const pieceMsg = {
+  type: 'piece',
+  index: index,
+  data: buffer.toString('base64')
+};
+socket.write(JSON.stringify(pieceMsg) + '\n');
+```
+
+### _handlePiece(socket, message)
+
+Processes received piece data and writes it to the file.
+
+```javascript:node.js:332-398
+// Decodes base64 data and writes to file
+const dataBuffer = Buffer.from(dataBase64, 'base64');
+await this.fileManager.writePiece(index, dataBuffer);
+
+// Updates tracking structures
+this.havePieces.add(index);
+this.missingPieces.delete(index);
+this.pendingPieces.delete(index);
+
+// Notifies other peers with 'have' message
+const haveMsg = { type: 'have', index: index };
+```
+
+This method also:
+- Verifies file integrity when download completes
+- Transitions node to seed mode after completion
+- Schedules next piece requests
+
+### _handleHave(socket, message)
+
+Processes notifications that a peer acquired a new piece.
+
+```javascript:node.js:400-412
+peerInfo.availablePieces.add(index);
+// Schedules request if we need this piece
+if (this.missingPieces.has(index) && !this.pendingPieces.has(index)) {
+  this._scheduleRequests();
+}
+```
+
+### _handlePeers(socket, message)
+
+Processes peer list messages for peer discovery.
+
+```javascript:node.js:414-433
+// Adds new peers and initiates connections based on ID comparison
+for (let peer of peersList) {
+  const { id: peerId, host, port } = peer;
+  if (this._shouldInitiateConnection(peerId)) {
+    this.connectToPeer(host, port);
+  }
+}
+```
+
+## Internal Methods
+
+### _setupSocketHandlers(socket)
+
+Configures event handlers for a peer connection socket.
+
+<ParamField path="socket" type="Socket" required>
+  TCP socket to configure
+</ParamField>
+
+Sets up handlers for:
+- `data` - Buffers and parses JSON messages (newline-delimited)
+- `close` - Cleans up peer state and reschedules requests
+- `error` - Logs connection errors
+
+### _scheduleRequests()
+
+Assigns piece download requests to available peers.
+
+```javascript:node.js:479-497
+// Iterates through peers and assigns missing pieces
+for (let [peerId, peerInfo] of this.knownPeers.entries()) {
+  if (!peerInfo.busy && peerInfo.availablePieces.size > 0) {
+    for (let pieceIndex of peerInfo.availablePieces) {
+      if (this.missingPieces.has(pieceIndex) && 
+          !this.pendingPieces.has(pieceIndex)) {
+        this._sendRequest(peerInfo.socket, pieceIndex);
+        break;
+      }
+    }
+  }
+}
+```
+
+### _shouldInitiateConnection(otherPeerId)
+
+Determines whether this node should initiate a connection to avoid duplicates.
+
+<ParamField path="otherPeerId" type="string" required>
+  ID of the other peer
+</ParamField>
+
+Returns `true` if this node's ID is greater (lexicographically) than the other peer's ID.
+
+```javascript:node.js:499-504
+return (otherPeerId && this.id && this.id > otherPeerId);
+```
+
+### _startProgressInterval()
+
+Starts a periodic timer to display download progress.
+
+```javascript:node.js:506-524
+// Displays progress every second
+setInterval(() => {
+  const bytesDone = this.fileSize - (this.missingPieces.size * this.pieceSize);
+  const percent = ((bytesDone / this.fileSize) * 100).toFixed(2);
+  const speed = bytesDone / elapsed; // bytes per second
+  console.log(`Progreso: ${percent}% (${bytesDone}/${this.fileSize} bytes)`);
+}, 1000);
+```
+
+Shows:
+- Download percentage
+- Bytes downloaded / total bytes
+- Download speed in KB/s

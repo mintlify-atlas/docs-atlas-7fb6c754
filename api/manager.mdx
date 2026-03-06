@@ -1,0 +1,321 @@
+---
+title: "Manager Class"
+description: "File management class for reading and writing pieces"
+---
+
+The `Manager` class handles all file operations for the P2P system, including reading pieces from seeders and writing received pieces to disk for leechers.
+
+## Constructor
+
+Creates a new file manager instance.
+
+```javascript
+const manager = new Manager(
+  './shared/file.txt',
+  'r',
+  65536
+);
+```
+
+<ParamField path="filePath" type="string" required>
+  Path to the file to manage
+</ParamField>
+
+<ParamField path="mode" type="string" required>
+  File opening mode:
+  - `'r'` - Read-only (for seeders with existing file)
+  - `'w+'` - Read/write (for leechers downloading file)
+</ParamField>
+
+<ParamField path="pieceSize" type="number" required>
+  Size of each piece in bytes (typically 64 KiB = 65536 bytes)
+</ParamField>
+
+## Properties
+
+<ResponseField name="filePath" type="string">
+  Path to the file being managed
+</ResponseField>
+
+<ResponseField name="pieceSize" type="number">
+  Size of each piece in bytes
+</ResponseField>
+
+<ResponseField name="fileHandle" type="FileHandle">
+  Node.js FileHandle for low-level file operations
+</ResponseField>
+
+<ResponseField name="fileSize" type="number">
+  Total size of the file in bytes
+</ResponseField>
+
+<ResponseField name="mode" type="string">
+  File opening mode ('r' for read-only, 'w+' for read/write)
+</ResponseField>
+
+## Methods
+
+### openFile()
+
+Opens the file according to the specified mode.
+
+```javascript
+await manager.openFile();
+```
+
+**Behavior:**
+- **Read mode (`'r'`)**: Opens existing file and retrieves its size
+- **Write mode (`'w+'`)**: Creates new file (or truncates if exists), size is initially 0
+
+```javascript:manager.js:15-28
+// From src/manager.js
+this.fileHandle = await fsp.open(this.filePath, this.mode);
+if (this.mode === 'r') {
+  const stats = await this.fileHandle.stat();
+  this.fileSize = stats.size;
+} else {
+  this.fileSize = 0;
+}
+```
+
+**Returns:** `Promise<void>`
+
+### setSize(size)
+
+Sets the file size (used for leechers when total size is known).
+
+```javascript
+await manager.setSize(1048576); // Set to 1 MB
+```
+
+<ParamField path="size" type="number" required>
+  Total file size in bytes
+</ParamField>
+
+**Behavior:**
+- Updates the `fileSize` property
+- Truncates or extends the file to the specified size
+- Fills with zeros if extending
+
+```javascript:manager.js:30-34
+this.fileSize = size;
+await this.fileHandle.truncate(size);
+```
+
+**Returns:** `Promise<void>`
+
+**Usage in Node class:**
+```javascript:node.js:241
+// When leecher receives file metadata
+await this.fileManager.setSize(this.fileSize);
+```
+
+### readPiece(index)
+
+Reads a specific piece from the file.
+
+```javascript
+const pieceData = await manager.readPiece(0); // Read first piece
+console.log(`Read ${pieceData.length} bytes`);
+```
+
+<ParamField path="index" type="number" required>
+  Zero-based index of the piece to read
+</ParamField>
+
+**Behavior:**
+- Calculates the file offset: `index * pieceSize`
+- Handles the last piece (may be smaller than `pieceSize`)
+- Reads data into a Buffer
+
+```javascript:manager.js:36-48
+const offset = index * this.pieceSize;
+let length = this.pieceSize;
+if (offset + length > this.fileSize) {
+  length = this.fileSize - offset; // Last piece adjustment
+}
+const buffer = Buffer.alloc(length);
+await this.fileHandle.read(buffer, 0, length, offset);
+return buffer;
+```
+
+**Returns:** `Promise<Buffer>` - Buffer containing the piece data
+
+**Usage in Node class:**
+```javascript:node.js:319-326
+// Seeder sending piece to peer
+this.fileManager.readPiece(index).then(buffer => {
+  const pieceMsg = {
+    type: 'piece',
+    index: index,
+    data: buffer.toString('base64')
+  };
+  socket.write(JSON.stringify(pieceMsg) + '\n');
+});
+```
+
+### writePiece(index, dataBuffer)
+
+Writes a piece to the file at the appropriate position.
+
+```javascript
+const data = Buffer.from('Hello, World!');
+await manager.writePiece(0, data); // Write to first piece
+```
+
+<ParamField path="index" type="number" required>
+  Zero-based index of the piece to write
+</ParamField>
+
+<ParamField path="dataBuffer" type="Buffer" required>
+  Buffer containing the piece data to write
+</ParamField>
+
+**Behavior:**
+- Calculates the file offset: `index * pieceSize`
+- Writes the buffer to the file at the calculated position
+- Does not validate piece size or integrity
+
+```javascript:manager.js:50-54
+const offset = index * this.pieceSize;
+await this.fileHandle.write(dataBuffer, 0, dataBuffer.length, offset);
+```
+
+**Returns:** `Promise<void>`
+
+**Usage in Node class:**
+```javascript:node.js:336-343
+// Leecher receiving piece from peer
+const dataBuffer = Buffer.from(dataBase64, 'base64');
+try {
+  await this.fileManager.writePiece(index, dataBuffer);
+} catch (err) {
+  console.error(`Error writing piece ${index}:`, err);
+}
+```
+
+### computeHash()
+
+Computes the SHA-1 hash of the entire file.
+
+```javascript
+const hash = await manager.computeHash();
+console.log(`File hash: ${hash}`);
+// Output: File hash: da39a3ee5e6b4b0d3255bfef95601890afd80709
+```
+
+**Behavior:**
+- Creates a read stream from the file
+- Computes SHA-1 hash incrementally
+- Returns hexadecimal string representation
+
+```javascript:manager.js:56-74
+return new Promise((resolve, reject) => {
+  const hash = crypto.createHash('sha1');
+  const stream = fs.createReadStream(this.filePath);
+  stream.on('data', chunk => {
+    hash.update(chunk);
+  });
+  stream.on('end', () => {
+    const result = hash.digest('hex');
+    resolve(result);
+  });
+  stream.on('error', err => {
+    reject(err);
+  });
+});
+```
+
+**Returns:** `Promise<string>` - SHA-1 hash in hexadecimal format (40 characters)
+
+**Usage in Node class:**
+```javascript:node.js:56-61
+// Seeder computing file hash on initialization
+try {
+  this.fileHash = await this.fileManager.computeHash();
+} catch (err) {
+  console.error('Error calculating file hash:', err);
+  process.exit(1);
+}
+```
+
+```javascript:node.js:378-386
+// Leecher verifying downloaded file integrity
+const downloadedHash = await this.fileManager.computeHash();
+if (downloadedHash === this.fileHash) {
+  console.log('Integrity verification: OK (hash matches).');
+} else {
+  console.warn('Warning: downloaded file hash differs from expected.');
+}
+```
+
+### close()
+
+Closes the file and releases the file descriptor.
+
+```javascript
+await manager.close();
+```
+
+**Behavior:**
+- Closes the file handle if open
+- Sets `fileHandle` to `null`
+- Should be called when file operations are complete
+
+```javascript:manager.js:76-82
+if (this.fileHandle) {
+  await this.fileHandle.close();
+  this.fileHandle = null;
+}
+```
+
+**Returns:** `Promise<void>`
+
+## Piece Size Handling
+
+The default piece size is **64 KiB (65,536 bytes)**:
+
+```javascript:node.js:13
+this.pieceSize = 65536; // 64 KiB by default
+```
+
+For small files, the piece size is automatically adjusted:
+
+```javascript:node.js:44-48
+if (this.fileSize < this.pieceSize) {
+  this.pieceSize = this.fileSize;
+  this.fileManager.pieceSize = this.fileSize;
+}
+```
+
+### Calculating Number of Pieces
+
+```javascript:node.js:50
+this.numPieces = Math.ceil(this.fileSize / this.pieceSize);
+```
+
+**Example:**
+- File size: 200,000 bytes
+- Piece size: 65,536 bytes
+- Number of pieces: `Math.ceil(200000 / 65536) = 4`
+  - Piece 0: 65,536 bytes
+  - Piece 1: 65,536 bytes
+  - Piece 2: 65,536 bytes
+  - Piece 3: 3,392 bytes (last piece)
+
+## Error Handling
+
+All methods return Promises and should be wrapped in try-catch blocks:
+
+```javascript
+try {
+  await manager.openFile();
+  await manager.setSize(1048576);
+  const piece = await manager.readPiece(0);
+  await manager.writePiece(1, piece);
+  const hash = await manager.computeHash();
+  await manager.close();
+} catch (err) {
+  console.error('File operation error:', err);
+}
+```

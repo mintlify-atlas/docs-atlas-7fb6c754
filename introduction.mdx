@@ -1,0 +1,111 @@
+---
+title: "Introduction"
+description: "A peer-to-peer file sharing system inspired by BitTorrent, built with Node.js"
+---
+
+## What is P2P File Share?
+
+P2P File Share is a **pure peer-to-peer file sharing system** built with Node.js, inspired by the BitTorrent protocol. It enables multiple clients to exchange files directly with each other without requiring a central server. Each node acts as both a client and a server, creating a distributed network where files are shared efficiently among peers.
+
+Unlike traditional file sharing systems that rely on centralized servers, P2P File Share implements a fully decentralized architecture where:
+
+- **No central server is required** - Files are transferred directly between peers
+- **No tracker dependency** - Peer discovery happens through peer exchange (PEX)
+- **Equal participation** - Every node can accept incoming connections and connect to known peers
+- **Collaborative distribution** - Files are divided into pieces that are downloaded and shared simultaneously, accelerating distribution
+
+<Note>
+This is a prototype implementation designed for educational purposes. It does not include encryption or authentication mechanisms.
+</Note>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Pure P2P Architecture" icon="network-wired">
+    No trackers or central servers required. Operates in a fully distributed manner.
+  </Card>
+  
+  <Card title="Peer Exchange (PEX)" icon="users">
+    Dynamic peer discovery - nodes share information about other peers to build the network.
+  </Card>
+  
+  <Card title="Piece-based Transfer" icon="puzzle-piece">
+    Files are divided into 64 KiB pieces (configurable) for efficient parallel downloading.
+  </Card>
+  
+  <Card title="Integrity Verification" icon="shield-check">
+    SHA-1 hash calculation and verification ensures file integrity after download.
+  </Card>
+  
+  <Card title="Progress Tracking" icon="chart-line">
+    Real-time console output showing download percentage, bytes transferred, and average speed.
+  </Card>
+  
+  <Card title="Cross-platform" icon="globe">
+    Works on Linux, Windows, and macOS with Node.js v22+.
+  </Card>
+</CardGroup>
+
+## Architecture Overview
+
+The P2P File Share system uses a mesh network topology where nodes connect to each other via TCP sockets. The protocol implements several message types for coordination:
+
+### Protocol Messages
+
+- **`handshake`** - Initial connection and metadata exchange (file name, size, hash, piece size)
+- **`bitfield`** - Broadcast which pieces a peer currently has available
+- **`request`** - Request a specific piece from a peer
+- **`piece`** - Send requested piece data (base64 encoded)
+- **`have`** - Notify peers when a new piece is acquired
+- **`peers`** - Exchange peer addresses for network discovery
+
+### How It Works
+
+1. **Seeder nodes** have the complete file and listen for connections
+2. **Leecher nodes** connect to a seed or another peer to begin downloading
+3. Nodes exchange metadata through handshake messages
+4. Peers share their piece availability via bitfield messages
+5. Leechers request pieces from peers that have them
+6. As pieces are downloaded, nodes notify others via `have` messages
+7. Once complete, leechers verify file integrity and become seeders themselves
+
+<Note>
+The system implements an anti-collision rule: only the peer with the higher ID initiates connections to prevent duplicate connections between the same pair of peers.
+</Note>
+
+## Project Structure
+
+The codebase is organized into three main modules:
+
+```
+p2p-file-share/
+├── src/
+│   ├── manager.js    # File I/O operations and hash calculation
+│   ├── node.js       # P2P logic: connections, protocol, piece exchange
+│   └── peer.js       # Entry point: argument parsing and node startup
+├── package.json      # npm configuration and scripts
+└── README.md         # Project documentation
+```
+
+### Module Responsibilities
+
+- **`manager.js`** - Handles reading and writing file pieces, calculating SHA-1 hashes
+- **`node.js`** - Core P2P networking, TCP connections, message protocol implementation
+- **`peer.js`** - Command-line interface and application entry point
+
+## Use Cases
+
+P2P File Share is ideal for:
+
+- **Learning** - Understanding how BitTorrent-style protocols work
+- **Local networks** - Fast file distribution across multiple machines
+- **Development** - Building custom P2P applications
+- **Education** - Teaching distributed systems concepts
+
+<Warning>
+This implementation does not include encryption or authentication. Do not use it to share sensitive files over untrusted networks.
+</Warning>
+
+## What's Next?
+
+Ready to get started? Follow the [Installation](/installation) guide to set up P2P File Share, then try the [Quickstart](/quickstart) tutorial to share your first file.

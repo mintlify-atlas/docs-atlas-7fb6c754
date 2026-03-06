@@ -1,0 +1,424 @@
+---
+title: 'Peer Exchange (PEX)'
+description: 'How peers discover each other without trackers using distributed peer exchange'
+---
+
+## What is Peer Exchange?
+
+**Peer Exchange (PEX)** is a decentralized peer discovery mechanism that allows peers to learn about other peers in the swarm without relying on central trackers or DHT (Distributed Hash Table).
+
+<Info>
+  In this P2P system, PEX is the **only** peer discovery method. There are no trackers, no bootstrap servers, and no DHT - just peers sharing information about other peers.
+</Info>
+
+## How PEX Works
+
+When peers connect, they exchange information about other peers they know. This creates a viral spread of peer knowledge throughout the swarm:
+
+<Steps>
+  <Step title="Initial Connection">
+    A leecher connects to a bootstrap peer (specified via `--peer` flag):
+    
+    ```bash
+    npm run leech -- --port 6882 --file output.txt --peer 127.0.0.1:6881
+    ```
+    
+    ```javascript
+    // In peer.js
+    if (peerHost && peerPort) {
+        console.log(`Conectando con peer inicial ${peerHost}:${peerPort}...`);
+        node.connectToPeer(peerHost, peerPort);
+    }
+    ```
+  </Step>
+  
+  <Step title="Handshake Completion">
+    Both peers complete the handshake and verify they're sharing the same file.
+  </Step>
+  
+  <Step title="Peer List Sharing">
+    The bootstrap peer sends a 'peers' message with all other peers it knows:
+    
+    ```javascript
+    // After handshake, share known peers
+    if (!socket.isOutgoing) {
+        const otherPeers = [];
+        for (let [pid, pinfo] of this.knownPeers.entries()) {
+            if (pid !== remoteId && pinfo.socket) {
+                otherPeers.push({ 
+                    id: pid, 
+                    host: pinfo.host || pinfo.socket.remoteAddress, 
+                    port: pinfo.port 
+                });
+            }
+        }
+        if (otherPeers.length > 0) {
+            const peersMsg = { type: 'peers', peers: otherPeers };
+            socket.write(JSON.stringify(peersMsg) + '\n');
+        }
+    }
+    ```
+  </Step>
+  
+  <Step title="New Peer Announcement">
+    The bootstrap peer also notifies all existing peers about the new peer:
+    
+    ```javascript
+    // Notify other peers about the new peer
+    const newPeerInfo = { id: remoteId, host: socket.remoteAddress, port: remotePort };
+    for (let [pid, pinfo] of this.knownPeers.entries()) {
+        if (pid !== remoteId && pinfo.socket) {
+            const singlePeerMsg = { type: 'peers', peers: [ newPeerInfo ] };
+            pinfo.socket.write(JSON.stringify(singlePeerMsg) + '\n');
+        }
+    }
+    ```
+  </Step>
+  
+  <Step title="Connection Decision">
+    Each peer that learns about a new peer applies the connection rule to decide whether to initiate a connection.
+  </Step>
+  
+  <Step title="Mesh Formation">
+    As peers connect to each other, they continue sharing peer lists, creating a fully connected mesh network.
+  </Step>
+</Steps>
+
+## The Connection Rule
+
+To prevent duplicate connections (where both peers try to connect to each other simultaneously), the protocol implements a simple but effective rule:
+
+<Note>
+  **Rule**: Only the peer with the **higher ID** (lexicographically) initiates the connection.
+</Note>
+
+### Implementation
+
+```javascript
+_shouldInitiateConnection(otherPeerId) {
+    // Returns true if this node should initiate connection to the other peer.
+    // Rule: the peer with higher ID initiates the connection.
+    return (otherPeerId && this.id && this.id > otherPeerId);
+}
+```
+
+### Example
+
+Consider three peers:
+- **Peer A**: ID = `1a2b3c4d5e6f7890`
+- **Peer B**: ID = `5f4e3d2c1b0a9876`
+- **Peer C**: ID = `9f8e7d6c5b4a3210`
+
+**Scenario**: Peer A learns about Peer C through PEX
+
+```javascript
+// Peer A receives peers message containing Peer C's info
+_handlePeers(socket, message) {
+    const peersList = message.peers;
+    for (let peer of peersList) {
+        const { id: peerId, host, port } = peer;
+        if (peerId === this.id) continue;  // Skip self
+        
+        if (!this.knownPeers.has(peerId)) {
+            this.knownPeers.set(peerId, { 
+                id: peerId, host, port, 
+                socket: null, 
+                availablePieces: new Set(), 
+                busy: false 
+            });
+            
+            if (this._shouldInitiateConnection(peerId)) {
+                // Peer A ID: 1a2b... < Peer C ID: 9f8e...
+                // this.id (1a2b...) > peerId (9f8e...) = false
+                // Peer A does NOT initiate
+                console.log(`Descubierto peer ${peerId}. Esperando a que el peer inicie conexión.`);
+            } else {
+                // If the condition was true, Peer A would connect
+                console.log(`Descubierto peer ${peerId} en ${host}:${port}, iniciando conexión...`);
+                this.connectToPeer(host, port);
+            }
+        }
+    }
+}
+```
+
+Since `1a2b...` < `9f8e...` (lexicographically), Peer A **waits** for Peer C to initiate the connection.
+
+Meanwhile, when Peer C learns about Peer A:
+- Peer C ID: `9f8e...` > Peer A ID: `1a2b...`
+- Peer C **initiates** the connection to Peer A
+
+<Info>
+  This asymmetric initiation prevents the "connection collision" problem where both peers simultaneously try to connect to each other, potentially creating duplicate connections.
+</Info>
+
+## PEX Message Format
+
+The 'peers' message contains an array of peer information:
+
+```json
+{
+  "type": "peers",
+  "peers": [
+    {
+      "id": "ab12cd34ef567890",
+      "host": "192.168.1.100",
+      "port": 6881
+    },
+    {
+      "id": "1a2b3c4d5e6f7890",
+      "host": "192.168.1.101",
+      "port": 6882
+    }
+  ]
+}
+```
+
+### Peer Object Fields
+
+- **id**: 16-character hexadecimal string (generated from 8 random bytes)
+- **host**: IP address or hostname of the peer
+- **port**: TCP port the peer is listening on
+
+## Peer Discovery Workflow
+
+Here's a complete example of how peers discover each other:
+
+### Initial State
+
+```
+Seeder (S)  :  Port 6881, ID: ff00aa11bb22cc33
+   |
+   | (has the complete file)
+   |
+```
+
+### Leecher 1 Joins
+
+```bash
+# Leecher 1 starts and connects to seeder
+npm run leech -- --port 6882 --file download.txt --peer 127.0.0.1:6881
+```
+
+```
+Seeder (S)  ←---connection---  Leecher 1 (L1)
+  6881                           6882
+  ff00...                        aa11bb22cc33dd44
+
+S → L1: handshake
+L1 → S: handshake
+S → L1: bitfield [0,1,2,...,99] (all pieces)
+L1 → S: bitfield [] (no pieces yet)
+S → L1: peers [] (no other peers known)
+```
+
+### Leecher 2 Joins
+
+```bash
+# Leecher 2 starts and connects to seeder
+npm run leech -- --port 6883 --file download.txt --peer 127.0.0.1:6881
+```
+
+```
+        Seeder (S)
+         6881, ff00...
+        /           \
+       /             \
+Leecher 1 (L1)    Leecher 2 (L2)
+6882, aa11...     6883, bb22cc33dd44ee55
+
+L2 → S: connect + handshake
+S → L2: handshake
+
+# Seeder shares L1 with L2
+S → L2: peers [{id: "aa11...", host: "127.0.0.1", port: 6882}]
+
+# Seeder notifies L1 about L2
+S → L1: peers [{id: "bb22...", host: "127.0.0.1", port: 6883}]
+```
+
+### Connection Decision
+
+```javascript
+// L1 receives info about L2
+// L1 ID: aa11bb22cc33dd44
+// L2 ID: bb22cc33dd44ee55
+// aa11... < bb22... → L1 does NOT initiate
+
+// L2 receives info about L1  
+// L2 ID: bb22cc33dd44ee55
+// L1 ID: aa11bb22cc33dd44
+// bb22... > aa11... → L2 DOES initiate
+```
+
+### Final Mesh
+
+```
+        Seeder (S)
+         6881, ff00...
+        /           \
+       /             \
+Leecher 1 (L1) ←--→ Leecher 2 (L2)
+6882, aa11...       6883, bb22...
+
+# Now all three peers are connected
+# L1 and L2 can exchange pieces directly
+# Reduces load on the seeder
+```
+
+## Advantages of PEX
+
+<CardGroup cols={2}>
+  <Card title="No Central Dependency" icon="server">
+    Eliminates single points of failure. No tracker servers required.
+  </Card>
+  
+  <Card title="Dynamic Discovery" icon="magnifying-glass">
+    Peers continuously learn about new peers as they join the swarm.
+  </Card>
+  
+  <Card title="Rapid Propagation" icon="network-wired">
+    New peer information spreads virally through existing connections.
+  </Card>
+  
+  <Card title="Bandwidth Efficiency" icon="gauge-high">
+    Leechers can download from other leechers, not just the seeder.
+  </Card>
+</CardGroup>
+
+## PEX Limitations
+
+<Note>
+  **Bootstrap Requirement**: At least one initial peer address must be known to join the swarm. Without a bootstrap peer, isolated nodes cannot discover each other.
+</Note>
+
+Future enhancements could include:
+- **Multicast discovery** on local networks
+- **DHT integration** for global peer discovery
+- **Peer list persistence** to remember peers across restarts
+
+## Implementation Details
+
+### Peer Information Storage
+
+Each node maintains a map of known peers:
+
+```javascript
+this.knownPeers = new Map();
+// Key: peer ID (string)
+// Value: {
+//   id: string,
+//   host: string,
+//   port: number,
+//   socket: Socket | null,
+//   availablePieces: Set<number>,
+//   busy: boolean
+// }
+```
+
+### Adding New Peers
+
+When learning about a new peer:
+
+```javascript
+if (!this.knownPeers.has(peerId)) {
+    // Add to known peers
+    this.knownPeers.set(peerId, { 
+        id: peerId, 
+        host: host, 
+        port: port, 
+        socket: null,                    // Not connected yet
+        availablePieces: new Set(),      // Don't know pieces yet
+        busy: false                      // Not handling any request
+    });
+    
+    // Apply connection rule
+    if (this._shouldInitiateConnection(peerId)) {
+        console.log(`Descubierto peer ${peerId} en ${host}:${port}, iniciando conexión...`);
+        this.connectToPeer(host, port);
+    } else {
+        console.log(`Descubierto peer ${peerId}. Esperando a que el peer inicie conexión (regla de prevenir colisión).`);
+    }
+}
+```
+
+### Connection State Transitions
+
+<Steps>
+  <Step title="Discovered">
+    Peer added to `knownPeers` map with `socket: null`
+  </Step>
+  
+  <Step title="Connecting">
+    If connection rule passes, `connectToPeer()` initiates TCP connection
+  </Step>
+  
+  <Step title="Connected">
+    Socket established, handshake exchanged, `socket` field populated
+  </Step>
+  
+  <Step title="Active">
+    Bitfield exchanged, pieces being requested/served
+  </Step>
+  
+  <Step title="Disconnected">
+    Socket closed, `socket` set to `null`, but peer remains in `knownPeers`
+  </Step>
+</Steps>
+
+## Preventing Duplicate Connections
+
+The ID comparison rule is critical for network efficiency:
+
+### Without the Rule
+
+```
+Peer A learns about Peer B → initiates connection
+Peer B learns about Peer A → initiates connection
+
+Result: Two TCP connections between A and B!
+- Wastes socket descriptors
+- Confuses message routing
+- Doubles bandwidth usage
+```
+
+### With the Rule
+
+```
+Peer A (ID: 1111) learns about Peer B (ID: 2222)
+→ 1111 < 2222, so A waits
+
+Peer B (ID: 2222) learns about Peer A (ID: 1111)
+→ 2222 > 1111, so B connects
+
+Result: Exactly one connection from B to A
+```
+
+<Info>
+  The lexicographic comparison of hex IDs provides a deterministic, symmetric decision rule that both peers will independently arrive at the same conclusion.
+</Info>
+
+## Console Output Examples
+
+When PEX discovers a new peer with higher ID:
+
+```
+Descubierto peer 9f8e7d6c5b4a3210 en 192.168.1.15:6883, iniciando conexión...
+```
+
+When PEX discovers a new peer with lower ID:
+
+```
+Descubierto peer 1a2b3c4d5e6f7890. Esperando a que el peer inicie conexión (regla de prevenir colisión).
+```
+
+## Summary
+
+Peer Exchange enables this P2P system to operate without any central infrastructure:
+
+- **Decentralized**: No trackers, DHT, or bootstrap servers needed beyond the initial peer
+- **Self-organizing**: The swarm grows organically as peers share information
+- **Efficient**: The connection rule prevents duplicate connections
+- **Scalable**: New peers rapidly discover the entire swarm through viral propagation
+
+This makes the system truly peer-to-peer, with each node contributing equally to both file distribution and peer discovery.

@@ -1,97 +1,83 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "P2P File Share"
+description: "A pure P2P file sharing system in Node.js that distributes files without central servers using BitTorrent-inspired protocol"
 ---
 
-## Setting up
+<div className="flex flex-col items-center justify-center py-16 px-4">
+  <h1 className="text-5xl font-bold text-center mb-6" style={{ color: '#ffffff' }}>
+    P2P File Share
+  </h1>
+  <p className="text-xl text-center mb-12 max-w-3xl" style={{ color: '#cfd0d2' }}>
+    Share files directly between peers without central servers. Built with Node.js and inspired by BitTorrent protocol.
+  </p>
+  <div className="flex gap-4 mb-16">
+    <a 
+      href="/quickstart" 
+      className="px-6 py-3 rounded-md font-semibold"
+      style={{ backgroundColor: '#529c3a', color: '#ffffff' }}
+    >
+      Get Started
+    </a>
+    <a 
+      href="https://github.com/low-level-js/p2p-file-share" 
+      className="px-6 py-3 rounded-md font-semibold border"
+      style={{ backgroundColor: 'transparent', color: '#ffffff', borderColor: '#848c8e' }}
+    >
+      View on GitHub
+    </a>
+  </div>
+</div>
 
-Get your documentation site up and running in minutes.
+## Key Features
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Pure P2P Architecture" icon="network-wired">
+    No trackers or central servers required. Peers connect directly to each other in a decentralized mesh network.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Peer Exchange" icon="arrows-spin">
+    Dynamic peer discovery through PEX protocol. Peers share information about other peers automatically.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="File Fragmentation" icon="puzzle-piece">
+    Files are split into 64 KiB pieces for efficient parallel downloading and sharing across the network.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Progress Tracking" icon="chart-line">
+    Real-time progress display with download speed, percentage complete, and bytes transferred.
   </Card>
-</Columns>
+  <Card title="Hash Verification" icon="shield-check">
+    SHA-1 hash verification ensures file integrity after download completes.
+  </Card>
+  <Card title="Cross-Platform" icon="laptop-code">
+    Works on Linux, Windows, and macOS with Node.js v22 or higher.
+  </Card>
+</CardGroup>
 
-## Create beautiful pages
+## Quick Example
 
-Everything you need to create world-class documentation.
+Start a seed node to share a file:
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+```bash
+npm start -- --port 6881 --file "/path/to/file.mp4"
+```
 
-## Need inspiration?
+Download the file from another machine:
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+```bash
+npm start -- --port 6882 --file "/path/to/output.mp4" --peer 192.168.1.100:6881
+```
+
+## Getting Started
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install Node.js v22+ and clone the repository
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get up and running in 5 minutes
+  </Card>
+  <Card title="Architecture" icon="diagram-project" href="/concepts/architecture">
+    Learn how the P2P system works
+  </Card>
+  <Card title="Protocol Reference" icon="book" href="/concepts/protocol">
+    Understand the messaging protocol
+  </Card>
+</CardGroup>
